@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# cli_debrid, Zurg, Plex, and Overseerr (optional) Setup Script
+# Zurg, cli_debrid, Plex, and Overseerr (optional) Setup Script
 #
 # Instructions:
 # 1. Copy the entire script below.
@@ -13,14 +13,11 @@
 # - Configure rclone for WebDAV access to Zurg.
 # - Set up a systemd service for the rclone mount.
 # - Install Portainer for easy Docker management.
-# - Pull Docker images for Zurg, Plex, cli_debrid, and optionally Overseerr.
+# - Pull Docker images for Zurg, Plex, cli_debrid (dev recommended), and optionally Overseerr.
 # - Create configuration files for Zurg and cli_debrid.
 # - Provide a Docker Compose configuration for Portainer.
 # - Test the Zurg API and rclone connection.
 
-# --- Functions ---
-
-# Gets the Real-Debrid API key from the user, securely.
 get_rd_key() {
   while true; do
     read -rs -p "Enter Real-Debrid API key: " key
@@ -30,22 +27,27 @@ get_rd_key() {
   done
 }
 
-# Gets a valid IP address, either user-provided or auto-detected.
 get_valid_ip() {
-    local ip=""
-    while true; do
-        read -rp "Enter IP (blank for auto-detect): " ip
-        if [[ -z "$ip" ]]; then
-            ip=$(ip route get 1 | awk '{print $(NF-2);exit}')
-            echo "Detected IP: $ip" >&2
-        fi
-         [[ -z "$ip" ]] && { echo "Could not auto-detect IP. Enter manually." >&2; continue; }
-        [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && break || { echo "Invalid IP. Use X.X.X.X format." >&2; continue; }
-    done
-    echo "$ip"
+  local ip=""
+  while true; do
+    read -rp "Enter IP (blank for auto-detect): " ip
+    if [[ -z "$ip" ]]; then
+      ip=$(ip route get 1 | awk '{print $(NF-2);exit}')
+      echo "Detected IP: $ip" >&2
+    fi
+    if [[ -z "$ip" ]] ; then
+      echo "Could not auto-detect IP. Enter manually." >&2
+      continue
+    fi
+    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] ; then
+      break
+    else
+      echo "Invalid IP. Use X.X.X.X format." >&2
+    fi
+  done
+  echo "$ip"
 }
 
-# Pulls a Docker image if it doesn't exist locally, retrying several times.
 pull_if_needed() {
   local image="$1"
   if docker inspect "$image" >/dev/null 2>&1; then
@@ -64,7 +66,6 @@ pull_if_needed() {
   return 1
 }
 
-# Starts or restarts a systemd service, with retries.
 start_service_with_retry() {
   local service_name="$1"
   local action="$2"
@@ -84,7 +85,7 @@ start_service_with_retry() {
   return 1
 }
 
-# Safely removes a file or directory if it exists.
+# Combined safe_remove function with Docker container check
 safe_remove() {
     local target="$1"
     if [[ -f "$target" ]]; then
@@ -93,18 +94,34 @@ safe_remove() {
     elif [[ -d "$target" ]]; then
         echo "Removing directory: $target"
         rm -rf "$target"
-    else :
-      echo "$target does not exist."
     fi
-}
-# --- Main Script ---
 
-# Check if running as root.
+    local containers=("zurg" "plex" "cli_debrid" "overseerr")
+    for container in "${containers[@]}"; do
+        if docker ps -a -q -f name="$container" | grep -q .; then
+            read -rp "Docker container '$container' is already running.  Remove and start fresh? (y/n): " REMOVE_CONTAINER
+            case "$REMOVE_CONTAINER" in
+                [yY])
+                    docker stop "$container" && docker rm "$container"
+                    echo "Removed Docker container: $container"
+                    ;;
+                [nN])
+                    echo "Keeping existing Docker container: $container"
+                    ;;
+                *)
+                    echo "Invalid input.  Keeping existing Docker container: $container"
+                    ;;
+            esac
+        fi
+    done
+}
+
 [[ $(id -u) -ne 0 ]] && { echo "Run as root."; exit 1; }
 
-# Prompt for cli_debrid image choice (main or dev).
+# Recommend cli_debrid:dev
+echo "It is recommended to use the 'dev' image for cli_debrid for the latest features and updates."
 while true; do
-  read -rp "Which cli_debrid image? (1) cli_main  (2) cli_debrid:dev  [1/2]: " CLI_DEBRID_CHOICE
+  read -rp "Which cli_debrid image? (1) cli_main  (2) cli_debrid:dev (recommended) [1/2]: " CLI_DEBRID_CHOICE
   case "$CLI_DEBRID_CHOICE" in
     1)
       CLI_DEBRID_IMAGE="godver3/cli_debrid:main"
@@ -120,36 +137,36 @@ while true; do
   esac
 done
 
-# Prompt for Overseerr installation.
 while true; do
-    read -rp "Install Overseerr? (y/n): " OVERSEERR_CHOICE
-    case "$OVERSEERR_CHOICE" in
-        [yY])
-            INSTALL_OVERSEERR=true
-            break
-            ;;
-        [nN])
-            INSTALL_OVERSEERR=false
-            break
-            ;;
-        *)
-            echo "Please answer y or n."
-            ;;
-    esac
+  read -rp "Install Overseerr? (y/n): " OVERSEERR_CHOICE
+  case "$OVERSEERR_CHOICE" in
+    [yY])
+      INSTALL_OVERSEERR=true
+      break
+      ;;
+    [nN])
+      INSTALL_OVERSEERR=false
+      break
+      ;;
+    *)
+      echo "Please answer y or n."
+      ;;
+  esac
 done
 
-# Get user inputs.
 RD_API_KEY=$(get_rd_key)
 LOCAL_IP=$(get_valid_ip)
-TZ="Europe/London"
-export TZ
 
-# Install dependencies (rclone, Docker, Docker Compose).
+# Perform a full system upgrade before installing packages
+echo "Performing system update and upgrade..."
+apt update && apt upgrade -y
+
+
 for pkg in rclone docker docker-compose-plugin; do
   if ! command -v "$pkg" &>/dev/null; then
     echo "Installing $pkg..."
     case "$pkg" in
-      rclone)              curl https://rclone.org/install.sh | bash ;;
+      rclone)                 curl https://rclone.org/install.sh | bash ;;
       docker)
         apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -160,7 +177,9 @@ for pkg in rclone docker docker-compose-plugin; do
     esac
   fi
 done
-# Pull required Docker images before installing Portainer.
+
+safe_remove "dummy_target" # Call the combined function
+
 for image in ghcr.io/debridmediamanager/zurg-testing:latest lscr.io/linuxserver/plex:latest "$CLI_DEBRID_IMAGE"; do
   pull_if_needed "$image"
 done
@@ -168,14 +187,11 @@ if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
   pull_if_needed "lscr.io/linuxserver/overseerr:latest"
 fi
 
-# Install Portainer if it's not already running.
 docker ps -q -f name=portainer | grep -q . || { echo "Installing Portainer..."; docker volume create portainer_data; docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest; }
 
-# Create necessary directories.
 mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone
 touch /user/logs/debug.log
 
-# Create Zurg configuration file.
 cat > /home/config.yml <<EOF
 zurg: v1
 
@@ -206,7 +222,6 @@ directories:
       - regex: /.*/
 EOF
 
-# Create cli_debrid configuration file.
 cat > /user/config/settings.json <<EOF
 {
     "general": {
@@ -217,7 +232,7 @@ cat > /user/config/settings.json <<EOF
         "provider": "realdebrid",
         "api_key": "$RD_API_KEY"
     },
-      "download": {
+    	"download": {
         "path": "/mnt",
         "path_style": "original",
         "seed_time": 0,
@@ -229,7 +244,6 @@ cat > /user/config/settings.json <<EOF
 }
 EOF
 
-# Create Plex update script.
 cat > /home/plex_update.sh <<EOF
 #!/bin/bash
 
@@ -246,7 +260,6 @@ echo "Updates completed!"
 EOF
 chmod +x /home/plex_update.sh
 
-# Create rclone configuration file.
 cat > /root/.config/rclone/rclone.conf <<EOF
 [zurg-wd]
 type = webdav
@@ -256,7 +269,6 @@ pacer_min_sleep = 10ms
 pacer_burst = 0
 EOF
 
-# Create systemd service for rclone mount.
 cat > /etc/systemd/system/zurg-rclone.service <<EOF
 [Unit]
 Description=Rclone mount for zurg
@@ -298,10 +310,7 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 
-# Display Portainer instructions and Docker Compose configuration.
-echo "Go to Portainer in your web browser: https://$LOCAL_IP:9443"
-echo "Create a new stack and paste the following configuration into the web editor:"
-
+echo "----------------------"
 cat <<EOF
 version: "3.8"
 services:
@@ -317,13 +326,14 @@ services:
   plex:
     image: lscr.io/linuxserver/plex:latest
     container_name: plex
-    network_mode: host
-    volumes:
-      - /mnt:/mnt
     restart: unless-stopped
     environment:
       - PUID=0
       - PGID=0
+    volumes:
+      - /mnt:/mnt
+    devices:
+      - "/dev/dri:/dev/dri"
   cli_debrid:
     image: $CLI_DEBRID_IMAGE
     pull_policy: always
@@ -331,44 +341,43 @@ services:
     ports:
       - "5000:5000"
       - "5001:5001"
-    devices:
-      - "/dev/dri:/dev/dri"
-    environment:
-      - TZ=$TZ
     restart: unless-stopped
     tty: true
     stdin_open: true
     volumes:
       - /user:/user
       - /mnt:/mnt
+    environment:
+      - TZ=Europe/London
 EOF
 if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
-    cat <<EOF
+  cat <<EOF
   overseerr:
     image: lscr.io/linuxserver/overseerr:latest
     container_name: overseerr
-    environment:
-      - TZ=$TZ
     volumes:
       - ./config:/config
     ports:
       - "5055:5055"
     restart: unless-stopped
+    environment:
+      - TZ=Europe/London
 EOF
 fi
 
 cat <<EOF
 EOF
 echo "----------------------"
+echo "Go to Portainer in your web browser: https://$LOCAL_IP:9443"
+echo "Create a new stack and paste the following configuration into the web editor:"
+echo "Copy everything between the dashed lines:"
 read -r -p "Once the stack is deployed in Portainer, press Enter to continue..."
 
-# Start and enable the zurg-rclone service.
 start_service_with_retry "zurg-rclone" "start"
 systemctl enable zurg-rclone.service
 
 start_service_with_retry "zurg-rclone" "restart"
 
-# Test Zurg API and rclone connection.
 test_api() {
   local retries=30
   for i in $(seq 1 "$retries"); do
@@ -380,7 +389,7 @@ test_api() {
     echo "Zurg: $state (attempt $i/$retries). Waiting..."
     sleep 5
   done
-   printf "Error: Zurg isn't running or the API is unreachable.\n"
+    printf "Error: Zurg isn't running or the API is unreachable.\n"
   return 1
 }
 
@@ -400,7 +409,6 @@ test_rclone() {
 
 test_api || exit 1
 
-# Display completion message and service access URLs.
 if test_rclone; then
   printf "Setup complete! It may take some time to populate, be patient. It's a good idea to reboot your system now.\n"
 else
@@ -413,3 +421,4 @@ if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
     printf '  Overseerr: http://%s:5055\n' "$LOCAL_IP"
 fi
 printf '  cli_debrid: http://%s:5000\n' "$LOCAL_IP"
+printf '  Plex Media Directory: /mnt\n'
