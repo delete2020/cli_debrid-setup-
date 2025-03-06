@@ -327,6 +327,7 @@ services:
     image: lscr.io/linuxserver/plex:latest
     container_name: plex
     restart: unless-stopped
+    network_mode: host
     environment:
       - PUID=0
       - PGID=0
