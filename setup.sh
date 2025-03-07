@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Zurg, cli_debrid, Plex, and Overseerr (optional) Setup Script
+# cli_debrid, Zurg, Plex, and Overseerr (optional) Setup Script
 #
 # Instructions:
 # 1. Copy the entire script below.
@@ -20,7 +20,7 @@
 
 get_rd_key() {
   while true; do
-    read -rs -p "Enter Real-Debrid API key: " key
+    read -rs -p "Enter Real-Debrid API key will remain: " key
     [[ -z "$key" ]] && { echo "API Key cannot be empty. Try again."; continue; }
     printf "%s" "$key"
     break
@@ -69,7 +69,7 @@ pull_if_needed() {
 start_service_with_retry() {
   local service_name="$1"
   local action="$2"
-  local retries=10
+  local retries=25
   local delay=2
 
   for i in $(seq 1 $retries); do
@@ -85,7 +85,6 @@ start_service_with_retry() {
   return 1
 }
 
-# Combined safe_remove function with Docker container check
 safe_remove() {
     local target="$1"
     if [[ -f "$target" ]]; then
@@ -118,7 +117,6 @@ safe_remove() {
 
 [[ $(id -u) -ne 0 ]] && { echo "Run as root."; exit 1; }
 
-# Recommend cli_debrid:dev
 echo "It is recommended to use the 'dev' image for cli_debrid for the latest features and updates."
 while true; do
   read -rp "Which cli_debrid image? (1) cli_main  (2) cli_debrid:dev (recommended) [1/2]: " CLI_DEBRID_CHOICE
@@ -157,7 +155,6 @@ done
 RD_API_KEY=$(get_rd_key)
 LOCAL_IP=$(get_valid_ip)
 
-# Perform a full system upgrade before installing packages
 echo "Performing system update and upgrade..."
 apt update && apt upgrade -y
 
@@ -178,7 +175,7 @@ for pkg in rclone docker docker-compose-plugin; do
   fi
 done
 
-safe_remove "dummy_target" # Call the combined function
+safe_remove "dummy_target" 
 
 for image in ghcr.io/debridmediamanager/zurg-testing:latest lscr.io/linuxserver/plex:latest "$CLI_DEBRID_IMAGE"; do
   pull_if_needed "$image"
@@ -189,7 +186,7 @@ fi
 
 docker ps -q -f name=portainer | grep -q . || { echo "Installing Portainer..."; docker volume create portainer_data; docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest; }
 
-mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone
+mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone /mnt/symlined 
 touch /user/logs/debug.log
 
 cat > /home/config.yml <<EOF
@@ -369,9 +366,9 @@ fi
 cat <<EOF
 EOF
 echo "----------------------"
+echo "↑↑Copy everything between the dashed lines↑↑:"
 echo "Go to Portainer in your web browser: https://$LOCAL_IP:9443"
 echo "Create a new stack and paste the following configuration into the web editor:"
-echo "Copy everything between the dashed lines:"
 read -r -p "Once the stack is deployed in Portainer, press Enter to continue..."
 
 start_service_with_retry "zurg-rclone" "start"
@@ -411,9 +408,22 @@ test_rclone() {
 test_api || exit 1
 
 if test_rclone; then
-  printf "Setup complete! It may take some time to populate, be patient. It's a good idea to reboot your system now.\n"
+  printf "Setup complete! It may take some time to populate, be patient.\n"
+  read -rp "Would you like to reboot your system now? (y/n): " REBOOT_CHOICE
+  case "$REBOOT_CHOICE" in
+    [yY])
+      echo "Rebooting..."
+     sudo systemctl reboot
+      ;;
+    [nN])
+      echo "Reboot skipped.  You may need to reboot manually for all changes to take effect."
+      ;;
+    *)
+      echo "Invalid input.  Reboot skipped.  You may need to reboot manually."
+      ;;
+  esac
 else
-  printf "Setup finished, but the rclone mount test failed. Check the logs!\n"
+  printf "Setup finished, but the rclone mount test failed. Check the logs in Portainer!\n"
 fi
 
 printf 'Access your services:\n'
