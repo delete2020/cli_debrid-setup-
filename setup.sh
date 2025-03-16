@@ -175,7 +175,20 @@ for pkg in rclone docker docker-compose-plugin; do
   fi
 done
 
-safe_remove "dummy_target" 
+if ! command -v rclone &>/dev/null; then
+  echo "Rclone install script might have failed. Installing via apt..."
+  apt-get update && apt-get install -y rclone
+fi
+
+if ! command -v rclone &>/dev/null; then
+  echo "ERROR: rclone is still not installed after fallback. Exiting..."
+  exit 1
+fi
+
+echo "Rclone version installed:"
+rclone version
+
+safe_remove "dummy_target"
 
 for image in ghcr.io/debridmediamanager/zurg-testing:latest lscr.io/linuxserver/plex:latest "$CLI_DEBRID_IMAGE"; do
   pull_if_needed "$image"
@@ -186,7 +199,7 @@ fi
 
 docker ps -q -f name=portainer | grep -q . || { echo "Installing Portainer..."; docker volume create portainer_data; docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest; }
 
-mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone /mnt/symlined 
+mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone /mnt/symlinked
 touch /user/logs/debug.log
 
 cat > /home/config.yml <<EOF
@@ -413,7 +426,7 @@ if test_rclone; then
   case "$REBOOT_CHOICE" in
     [yY])
       echo "Rebooting..."
-     sudo systemctl reboot
+      sudo systemctl reboot
       ;;
     [nN])
       echo "Reboot skipped.  You may need to reboot manually for all changes to take effect."
@@ -432,4 +445,4 @@ if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
     printf '  Overseerr: http://%s:5055\n' "$LOCAL_IP"
 fi
 printf '  cli_debrid: http://%s:5000\n' "$LOCAL_IP"
-printf '  Plex Media Directory: /mnt\n'
+printf '  Plex Media Directory: /mnt\n' 
