@@ -1,276 +1,205 @@
 #!/bin/bash
+# Debrid Media Stack Setup Script
+# This script sets up a complete media streaming stack using Real-Debrid
 
-# cli_debrid, Zurg, Plex, and Overseerr (optional) Setup Script
-#
-# Instructions:
-# 1. Copy the entire script below.
-# 2. Paste it into a new file on your server (e.g., `nano setup.sh`).
-# 3. Make the script executable: `chmod +x setup.sh`
-# 4. Run the script as root: `sudo ./setup.sh`
-#
-# This script will:
-# - Install rclone, Docker, and Docker Compose.
-# - Configure rclone for WebDAV access to Zurg.
-# - Set up a systemd service for the rclone mount.
-# - Install Portainer for easy Docker management.
-# - Pull Docker images for Zurg, Plex, cli_debrid (dev recommended), and optionally Overseerr.
-# - Create configuration files for Zurg and cli_debrid.
-# - Provide a Docker Compose configuration for Portainer.
-# - Test the Zurg API and rclone connection.
-
-get_rd_key() {
-  while true; do
-    read -rs -p "Enter Real-Debrid API key will remain: " key
-    [[ -z "$key" ]] && { echo "API Key cannot be empty. Try again."; continue; }
-    printf "%s" "$key"
-    break
-  done
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-get_valid_ip() {
-  local ip=""
-  while true; do
-    read -rp "Enter IP (blank for auto-detect): " ip
-    if [[ -z "$ip" ]]; then
-      ip=$(ip route get 1 | awk '{print $(NF-2);exit}')
-      echo "Detected IP: $ip" >&2
-    fi
-    if [[ -z "$ip" ]] ; then
-      echo "Could not auto-detect IP. Enter manually." >&2
-      continue
-    fi
-    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] ; then
-      break
-    else
-      echo "Invalid IP. Use X.X.X.X format." >&2
-    fi
-  done
-  echo "$ip"
-}
-
-pull_if_needed() {
-  local image="$1"
-  if docker inspect "$image" >/dev/null 2>&1; then
-    echo "Image '$image' exists. Skipping pull."
-    return 0
-  fi
-  echo "Pulling '$image'..."
-  local retries=10
-  local delay=5
-  for i in $(seq 1 $retries); do
-    docker pull "$image" && return 0
-    echo "Image pull... still trying (Attempt $i/$retries).  Waiting $delay seconds..."
-    sleep "$delay"
-  done
-  echo "Warning:  Couldn't pull image '$image' after $retries tries.  Moving on..."
-  return 1
-}
-
-start_service_with_retry() {
-  local service_name="$1"
-  local action="$2"
-  local retries=25
-  local delay=2
-
-  for i in $(seq 1 $retries); do
-    echo "Attempting to $action $service_name (attempt $i/$retries)..."
-    systemctl $action "$service_name" &>/dev/null
-    if systemctl is-active --quiet "$service_name"; then
-      echo "$service_name $action successful!."
-      return 0
-    fi
-    sleep "$delay"
-  done
-  echo "Warning: $service_name didn't $action after $retries tries."
-  return 1
-}
-
-safe_remove() {
-    local target="$1"
-    if [[ -f "$target" ]]; then
-        echo "Removing file: $target"
-        rm -f "$target"
-    elif [[ -d "$target" ]]; then
-        echo "Removing directory: $target"
-        rm -rf "$target"
-    fi
-
-    local containers=("zurg" "plex" "cli_debrid" "overseerr")
-    for container in "${containers[@]}"; do
-        if docker ps -a -q -f name="$container" | grep -q .; then
-            read -rp "Docker container '$container' is already running.  Remove and start fresh? (y/n): " REMOVE_CONTAINER
-            case "$REMOVE_CONTAINER" in
-                [yY])
-                    docker stop "$container" && docker rm "$container"
-                    echo "Removed Docker container: $container"
-                    ;;
-                [nN])
-                    echo "Keeping existing Docker container: $container"
-                    ;;
-                *)
-                    echo "Invalid input.  Keeping existing Docker container: $container"
-                    ;;
-            esac
-        fi
-    done
-}
-
-[[ $(id -u) -ne 0 ]] && { echo "Run as root."; exit 1; }
-
-echo "It is recommended to use the 'dev' image for cli_debrid for the latest features and updates."
-while true; do
-  read -rp "Which cli_debrid image? (1) cli_main  (2) cli_debrid:dev (recommended) [1/2]: " CLI_DEBRID_CHOICE
-  case "$CLI_DEBRID_CHOICE" in
-    1)
-      CLI_DEBRID_IMAGE="godver3/cli_debrid:main"
-      break
-      ;;
-    2)
-      CLI_DEBRID_IMAGE="godver3/cli_debrid:dev"
-      break
-      ;;
-    *)
-      echo "Invalid choice. Please enter 1 or 2."
-      ;;
-  esac
-done
-
-while true; do
-  read -rp "Install Overseerr? (y/n): " OVERSEERR_CHOICE
-  case "$OVERSEERR_CHOICE" in
-    [yY])
-      INSTALL_OVERSEERR=true
-      break
-      ;;
-    [nN])
-      INSTALL_OVERSEERR=false
-      break
-      ;;
-    *)
-      echo "Please answer y or n."
-      ;;
-  esac
-done
-
-RD_API_KEY=$(get_rd_key)
-LOCAL_IP=$(get_valid_ip)
-
-echo "Performing system update and upgrade..."
-apt update && apt upgrade -y
-
-
-for pkg in rclone docker docker-compose-plugin; do
-  if ! command -v "$pkg" &>/dev/null; then
-    echo "Installing $pkg..."
-    case "$pkg" in
-      rclone)                 curl https://rclone.org/install.sh | bash ;;
-      docker)
-        apt update && apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
-        apt update && apt install -y docker-ce docker-ce-cli containerd.io
-        ;;
-      docker-compose-plugin) apt update; apt install -y docker-compose-plugin ;;
-    esac
-  fi
-done
-
-if ! command -v rclone &>/dev/null; then
-  echo "Rclone install script might have failed. Installing via apt..."
-  apt-get update && apt-get install -y rclone
-fi
-
-if ! command -v rclone &>/dev/null; then
-  echo "ERROR: rclone is still not installed after fallback. Exiting..."
+if [[ $(id -u) -ne 0 ]]; then
+  echo "This script must be run as root. Try: sudo $0"
   exit 1
 fi
 
-echo "Rclone version installed:"
-rclone version
-
-safe_remove "dummy_target"
-
-for image in ghcr.io/debridmediamanager/zurg-testing:latest lscr.io/linuxserver/plex:latest "$CLI_DEBRID_IMAGE"; do
-  pull_if_needed "$image"
-done
-if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
-  pull_if_needed "lscr.io/linuxserver/overseerr:latest"
-fi
-
-docker ps -q -f name=portainer | grep -q . || { echo "Installing Portainer..."; docker volume create portainer_data; docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest; }
-
-mkdir -p /user/logs /user/config /user/db_content /mnt/zurg /root/.config/rclone /mnt/symlinked
+mkdir -p /user/logs /user/config /user/db_content
+mkdir -p /mnt/zurg /mnt/symlinked
+mkdir -p /root/.config/rclone
 touch /user/logs/debug.log
 
-cat > /home/config.yml <<EOF
-zurg: v1
+log "Created directory structure"
 
-token: $RD_API_KEY
-port: 9999
-concurrent_workers: 64
-check_for_changes_every_secs: 10
-enable_repair: false
-cache_network_test_results: true
-serve_from_rclone: false
-rar_action: none
-retain_folder_name_extension: true
-retain_rd_torrent_name: true
-hide_broken_torrents: true
-retry_503_errors: true
-delete_error_torrents: true
-on_library_update: sh ./plex_update.sh "\$@"
-directories:
-  shows:
-    group_order: 15
-    group: media
-    filters:
-      - has_episodes: true
-  movies:
-    group_order: 25
-    group: media
-    filters:
-      - regex: /.*/
-EOF
+if command -v docker &>/dev/null; then
+  containers=("zurg" "cli_debrid" "plex" "jellyfin" "emby" "overseerr" "jellyseerr")
+  for container in "${containers[@]}"; do
+    if docker ps -a -q -f name="$container" | grep -q .; then
+      echo "Container '$container' already exists."
+      read -p "Remove it? (y/n): " REMOVE
+      if [[ "${REMOVE,,}" == "y" ]]; then
+        docker stop "$container" 2>/dev/null
+        docker rm "$container" 2>/dev/null
+        log "Removed container: $container"
+      else
+        log "Keeping container: $container"
+      fi
+    fi
+  done
+fi
 
-cat > /user/config/settings.json <<EOF
-{
-    "general": {
-        "disable_media_scan": true,
-        "disable_webservice": false
-    },
-    "debrid": {
-        "provider": "realdebrid",
-        "api_key": "$RD_API_KEY"
-    },
-    	"download": {
-        "path": "/mnt",
-        "path_style": "original",
-        "seed_time": 0,
-        "max_connections": 4
-    },
-    "system": {
-        "log_level": "debug"
-    }
-}
-EOF
+ARCHITECTURE=$(uname -m)
+if [[ "$ARCHITECTURE" == "aarch64" || "$ARCHITECTURE" == "arm64" ]]; then
+  ARCHITECTURE_TYPE="arm64"
+else
+  ARCHITECTURE_TYPE="amd64"
+fi
 
-cat > /home/plex_update.sh <<EOF
-#!/bin/bash
+log "System architecture detected: $ARCHITECTURE ($ARCHITECTURE_TYPE)"
 
-webhook_url="http://$LOCAL_IP:5000/webhook/rclone"
+echo "It is recommended to use the 'dev' image for cli_debrid for the latest features."
+echo "1) Standard (main)"
+echo "2) Development (dev) - Recommended"
+read -p "Select option [2]: " CLI_CHOICE
+CLI_CHOICE=${CLI_CHOICE:-2}
 
-for arg in "\$@"; do
-  arg_clean=\$(echo "\$arg" | sed 's/\\//g')
-  echo "Notifying webhook for: \$arg_clean"
-  encoded_webhook_arg=\$(echo -n "\$arg_clean" | python3 -c "import sys, urllib.parse as ul; print(ul.quote(sys.stdin.read()))")
-  curl -s -X GET "\$webhook_url?file=\$encoded_webhook_arg"
-done
+if [[ "$CLI_CHOICE" == "1" ]]; then
+  if [[ "$ARCHITECTURE_TYPE" == "arm64" ]]; then
+    CLI_DEBRID_IMAGE="godver3/cli_debrid:main-arm64"
+    log "Selected ARM64 main image: godver3/cli_debrid:main-arm64"
+  else
+    CLI_DEBRID_IMAGE="godver3/cli_debrid:main"
+    log "Selected AMD64 main image: godver3/cli_debrid:main"
+  fi
+else
+  if [[ "$ARCHITECTURE_TYPE" == "arm64" ]]; then
+    CLI_DEBRID_IMAGE="godver3/cli_debrid:dev-arm64"
+    log "Selected ARM64 dev image: godver3/cli_debrid:dev-arm64"
+  else
+    CLI_DEBRID_IMAGE="godver3/cli_debrid:dev"
+    log "Selected AMD64 dev image: godver3/cli_debrid:dev"
+  fi
+fi
 
-echo "Updates completed!"
-EOF
-chmod +x /home/plex_update.sh
+echo "Choose a media server to install:"
+echo "1) Plex"
+echo "2) Jellyfin"
+echo "3) Emby"
+echo "4) Skip (don't install any media server)"
+read -p "Select option [1]: " MEDIA_CHOICE
+MEDIA_CHOICE=${MEDIA_CHOICE:-1}
 
-cat > /root/.config/rclone/rclone.conf <<EOF
+case "$MEDIA_CHOICE" in
+  1)
+    MEDIA_SERVER="plex"
+    MEDIA_SERVER_IMAGE="lscr.io/linuxserver/plex:latest"
+    MEDIA_SERVER_PORT="32400"
+    log "Selected media server: Plex"
+    ;;
+  2)
+    MEDIA_SERVER="jellyfin"
+    MEDIA_SERVER_IMAGE="lscr.io/linuxserver/jellyfin:latest"
+    MEDIA_SERVER_PORT="8096"
+    log "Selected media server: Jellyfin"
+    ;;
+  3)
+    MEDIA_SERVER="emby"
+    MEDIA_SERVER_IMAGE="lscr.io/linuxserver/emby:latest" 
+    MEDIA_SERVER_PORT="8096"
+    log "Selected media server: Emby"
+    ;;
+  *)
+    MEDIA_SERVER="none"
+    log "Skipping media server installation"
+    ;;
+esac
+
+echo "Choose a request manager to install:"
+echo "1) Overseerr (works best with Plex)"
+echo "2) Jellyseerr (works best with Jellyfin)"
+echo "3) Skip (don't install any request manager)"
+read -p "Select option [1]: " REQUEST_CHOICE
+REQUEST_CHOICE=${REQUEST_CHOICE:-1}
+
+case "$REQUEST_CHOICE" in
+  1)
+    REQUEST_MANAGER="overseerr"
+    REQUEST_MANAGER_IMAGE="lscr.io/linuxserver/overseerr:latest"
+    REQUEST_MANAGER_PORT="5055"
+    log "Selected request manager: Overseerr"
+    ;;
+  2)
+    REQUEST_MANAGER="jellyseerr"
+    REQUEST_MANAGER_IMAGE="fallenbagel/jellyseerr:latest"
+    REQUEST_MANAGER_PORT="5055"
+    log "Selected request manager: Jellyseerr"
+    ;;
+  *)
+    REQUEST_MANAGER="none"
+    log "Skipping request manager installation"
+    ;;
+esac
+
+echo "Do you want to install Portainer for Docker management?"
+read -p "Y/n: " PORTAINER_CHOICE
+PORTAINER_CHOICE=${PORTAINER_CHOICE:-y}
+
+if [[ "${PORTAINER_CHOICE,,}" == "y" || "${PORTAINER_CHOICE,,}" == "yes" ]]; then
+  INSTALL_PORTAINER=true
+  log "Portainer will be installed"
+else
+  INSTALL_PORTAINER=false
+  log "Skipping Portainer installation"
+fi
+
+SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
+echo "Current system timezone: $SYSTEM_TIMEZONE"
+read -p "Enter timezone (leave blank for system timezone): " CUSTOM_TIMEZONE
+TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
+log "Using timezone: $TIMEZONE"
+
+echo "Enter Real-Debrid API key (will remain on your system): "
+read -s RD_API_KEY
+echo
+log "Real-Debrid API key received"
+
+IP=""
+read -p "Enter server IP (blank for auto-detect): " IP
+if [[ -z "$IP" ]]; then
+  IP=$(ip route get 1 | awk '{print $(NF-2);exit}')
+  log "Detected IP: $IP"
+fi
+
+if [[ ! "$IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+  log "Invalid IP format. Using localhost."
+  IP="127.0.0.1"
+fi
+
+log "Using server IP: $IP"
+
+if ! command -v docker &>/dev/null; then
+  log "Installing Docker..."
+  apt update
+  apt install -y curl apt-transport-https ca-certificates gnupg lsb-release
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  apt update
+  apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+fi
+
+if ! command -v docker &>/dev/null; then
+  log "Failed to install Docker. Exiting."
+  exit 1
+fi
+
+log "Docker is installed"
+
+if ! command -v rclone &>/dev/null; then
+  log "Installing rclone..."
+  curl https://rclone.org/install.sh | bash
+  
+  if ! command -v rclone &>/dev/null; then
+    log "Rclone install script failed. Trying apt installation..."
+    apt update && apt install -y rclone
+  fi
+fi
+
+if ! command -v rclone &>/dev/null; then
+  log "Failed to install rclone. Exiting."
+  exit 1
+fi
+
+log "rclone is installed"
+
+log "Configuring rclone..."
+cat > "/root/.config/rclone/rclone.conf" <<EOF
 [zurg-wd]
 type = webdav
 url = http://127.0.0.1:9999/dav/
@@ -279,10 +208,11 @@ pacer_min_sleep = 10ms
 pacer_burst = 0
 EOF
 
-cat > /etc/systemd/system/zurg-rclone.service <<EOF
+cat > "/etc/systemd/system/zurg-rclone.service" <<EOF
 [Unit]
 Description=Rclone mount for zurg
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=notify
@@ -318,11 +248,166 @@ StartLimitBurst=3
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
 
-echo "----------------------"
-cat <<EOF
+log "Enabling and starting rclone service..."
+systemctl daemon-reload
+systemctl enable zurg-rclone.service
+systemctl start zurg-rclone.service
+log "Rclone service started (will connect once Zurg is running)"
+
+log "Configuring Zurg..."
+cat > "/home/plex_update.sh" <<EOF
+#!/bin/bash
+
+webhook_url="http://${IP}:5000/webhook/rclone"
+
+for arg in "\$@"; do
+  arg_clean=\$(echo "\$arg" | sed 's/\\//g')
+  echo "Notifying webhook for: \$arg_clean"
+  encoded_webhook_arg=\$(echo -n "\$arg_clean" | python3 -c "import sys, urllib.parse as ul; print(ul.quote(sys.stdin.read()))")
+  curl -s -X GET "\$webhook_url?file=\$encoded_webhook_arg"
+done
+
+echo "Updates completed!"
+EOF
+chmod +x /home/plex_update.sh
+
+cat > "/home/config.yml" <<EOF
+zurg: v1
+
+token: ${RD_API_KEY}
+port: 9999
+concurrent_workers: 64
+check_for_changes_every_secs: 10
+enable_repair: false
+cache_network_test_results: true
+serve_from_rclone: false
+rar_action: none
+retain_folder_name_extension: true
+retain_rd_torrent_name: true
+hide_broken_torrents: true
+retry_503_errors: true
+delete_error_torrents: true
+on_library_update: sh ./plex_update.sh "\$@"
+directories:
+  shows:
+    group_order: 15
+    group: media
+    filters:
+      - has_episodes: true
+  movies:
+    group_order: 25
+    group: media
+    filters:
+      - regex: /.*/
+EOF
+
+log "Configuring cli_debrid..."
+cat > "/user/config/settings.json" <<EOF
+{
+    "general": {
+        "disable_media_scan": true,
+        "disable_webservice": false
+    },
+    "debrid": {
+        "provider": "realdebrid",
+        "api_key": "${RD_API_KEY}"
+    },
+    "download": {
+        "path": "/mnt",
+        "path_style": "original",
+        "seed_time": 0,
+        "max_connections": 4
+    },
+    "system": {
+        "log_level": "debug"
+    }
+}
+EOF
+
+pull_docker_image() {
+  local image="$1"
+  local max_retries=10
+  local retry_delay=5
+  
+  if docker inspect "$image" &>/dev/null; then
+    log "Image '$image' exists. Skipping pull."
+    return 0
+  fi
+  
+  log "Pulling Docker image: $image"
+  
+  for ((i=1; i<=max_retries; i++)); do
+    if docker pull "$image"; then
+      log "Successfully pulled image: $image"
+      return 0
+    fi
+    
+    log "Pull attempt $i/$max_retries failed. Retrying in $retry_delay seconds..."
+    sleep "$retry_delay"
+  done
+  
+  log "Warning: Failed to pull image '$image' after $max_retries attempts."
+  echo "Options:"
+  echo "1) Continue anyway"
+  echo "2) Retry pulling the image"
+  echo "3) Exit setup"
+  read -p "Select option [1]: " PULL_CHOICE
+  PULL_CHOICE=${PULL_CHOICE:-1}
+  
+  case "$PULL_CHOICE" in
+    1)
+      log "Continuing without image: $image"
+      return 1
+      ;;
+    2)
+      log "Retrying image pull..."
+      pull_docker_image "$image" $((max_retries + 5)) $((retry_delay + 5))
+      ;;
+    3|*)
+      log "Exiting at user request."
+      exit 1
+      ;;
+  esac
+}
+
+log "Pulling required Docker images..."
+pull_docker_image "ghcr.io/debridmediamanager/zurg-testing:latest"
+pull_docker_image "$CLI_DEBRID_IMAGE"
+
+if [[ "$MEDIA_SERVER" != "none" ]]; then
+  pull_docker_image "$MEDIA_SERVER_IMAGE"
+fi
+
+if [[ "$REQUEST_MANAGER" != "none" ]]; then
+  pull_docker_image "$REQUEST_MANAGER_IMAGE"
+fi
+
+if [[ "$INSTALL_PORTAINER" == "true" ]]; then
+  if ! docker ps -q -f name=portainer | grep -q .; then
+    log "Installing Portainer..."
+    pull_docker_image "portainer/portainer-ce:latest"
+    docker volume create portainer_data
+    docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v portainer_data:/data portainer/portainer-ce:latest
+    
+    if docker ps -q -f name=portainer | grep -q .; then
+      log "Portainer installed successfully at https://${IP}:9443"
+    else 
+      log "Failed to start Portainer"
+    fi
+  else
+    log "Portainer is already running"
+  fi
+fi
+
+log "Generating Docker Compose file..."
+DOCKER_COMPOSE_FILE="/tmp/docker-compose.yml"
+
+cat > "$DOCKER_COMPOSE_FILE" <<EOF
 version: "3.8"
+
 services:
   zurg:
     image: ghcr.io/debridmediamanager/zurg-testing:latest
@@ -333,20 +418,11 @@ services:
     volumes:
       - /home/config.yml:/app/config.yml
       - /home/plex_update.sh:/app/plex_update.sh
-  plex:
-    image: lscr.io/linuxserver/plex:latest
-    container_name: plex
-    restart: unless-stopped
-    network_mode: host
     environment:
-      - PUID=0
-      - PGID=0
-    volumes:
-      - /mnt:/mnt
-    devices:
-      - "/dev/dri:/dev/dri"
+      - TZ=${TIMEZONE}
+
   cli_debrid:
-    image: $CLI_DEBRID_IMAGE
+    image: ${CLI_DEBRID_IMAGE}
     pull_policy: always
     container_name: cli_debrid
     ports:
@@ -359,90 +435,168 @@ services:
       - /user:/user
       - /mnt:/mnt
     environment:
-      - TZ=Europe/London
+      - TZ=${TIMEZONE}
 EOF
-if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
-  cat <<EOF
-  overseerr:
-    image: lscr.io/linuxserver/overseerr:latest
-    container_name: overseerr
+
+if [[ "$MEDIA_SERVER" != "none" ]]; then
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+
+  ${MEDIA_SERVER}:
+    image: ${MEDIA_SERVER_IMAGE}
+    container_name: ${MEDIA_SERVER}
+    restart: unless-stopped
+EOF
+  
+  if [[ "$MEDIA_SERVER" == "plex" ]]; then
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    network_mode: host
+EOF
+  else
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    ports:
+      - "${MEDIA_SERVER_PORT}:${MEDIA_SERVER_PORT}"
+EOF
+  fi
+  
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE}
+    volumes:
+      - /mnt:/mnt
+EOF
+  
+  if [[ "$MEDIA_SERVER" == "plex" ]]; then
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+      - ./config:/config
+EOF
+  else
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+      - ./config:/config
+EOF
+  fi
+  
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    devices:
+      - "/dev/dri:/dev/dri"
+EOF
+fi
+
+if [[ "$REQUEST_MANAGER" != "none" ]]; then
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+
+  ${REQUEST_MANAGER}:
+    image: ${REQUEST_MANAGER_IMAGE}
+    container_name: ${REQUEST_MANAGER}
+    restart: unless-stopped
+    ports:
+      - "${REQUEST_MANAGER_PORT}:${REQUEST_MANAGER_PORT}"
     volumes:
       - ./config:/config
-    ports:
-      - "5055:5055"
-    restart: unless-stopped
     environment:
-      - TZ=Europe/London
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE}
 EOF
 fi
 
-cat <<EOF
-EOF
-echo "----------------------"
-echo "↑↑Copy everything between the dashed lines↑↑:"
-echo "Go to Portainer in your web browser: https://$LOCAL_IP:9443"
-echo "Create a new stack and paste the following configuration into the web editor:"
-read -r -p "Once the stack is deployed in Portainer, press Enter to continue..."
+log "Docker Compose file generated"
 
-start_service_with_retry "zurg-rclone" "start"
-systemctl enable zurg-rclone.service
+echo 
+echo "Docker Compose Configuration:"
+echo "-----------------------------------------------------------------------"
+cat "$DOCKER_COMPOSE_FILE"
+echo "-----------------------------------------------------------------------"
 
-start_service_with_retry "zurg-rclone" "restart"
-
-test_api() {
-  local retries=30
-  for i in $(seq 1 "$retries"); do
-    state=$(docker inspect --format='{{.State.Status}}' zurg 2>/dev/null)
-    if [[ "$state" == "running" ]] && curl --silent --fail --output /dev/null http://localhost:9999/dav/; then
-      printf 'Zurg is up and the API is ready!\n'
-      return 0
-    fi
-    echo "Zurg: $state (attempt $i/$retries). Waiting..."
-    sleep 5
-  done
-    printf "Error: Zurg isn't running or the API is unreachable.\n"
-  return 1
-}
-
-test_rclone() {
-  local retries=30
-  for i in $(seq 1 "$retries"); do
-    if rclone lsd zurg-wd: --verbose --retries 1 --timeout 10s 2>&1 | grep -v -- "Failed to create temp file"; then
-      printf 'Rclone connection successful!\n'
-      return 0
-    fi
-    echo "Rclone connection test failed (attempt $i/$retries).  Trying again..."
-    sleep 5
-  done
-  printf "Error: Rclone connection failed.\n" >&2
-  return 1
-}
-
-test_api || exit 1
-
-if test_rclone; then
-  printf "Setup complete! It may take some time to populate, be patient.\n"
-  read -rp "Would you like to reboot your system now? (y/n): " REBOOT_CHOICE
-  case "$REBOOT_CHOICE" in
-    [yY])
-      echo "Rebooting..."
-      sudo systemctl reboot
-      ;;
-    [nN])
-      echo "Reboot skipped.  You may need to reboot manually for all changes to take effect."
-      ;;
-    *)
-      echo "Invalid input.  Reboot skipped.  You may need to reboot manually."
-      ;;
-  esac
+if [[ "$INSTALL_PORTAINER" == "true" ]]; then
+  echo "Please go to Portainer in your web browser: https://${IP}:9443"
+  echo "Create a new stack and import the Docker Compose configuration shown above."
+  read -p "Press Enter once you've deployed the stack in Portainer..."
 else
-  printf "Setup finished, but the rclone mount test failed. Check the logs in Portainer!\n"
+  echo "Do you want to deploy the Docker Compose stack now?"
+  read -p "Y/n: " DEPLOY_CHOICE
+  DEPLOY_CHOICE=${DEPLOY_CHOICE:-y}
+  
+  if [[ "${DEPLOY_CHOICE,,}" == "y" || "${DEPLOY_CHOICE,,}" == "yes" ]]; then
+    log "Deploying Docker Compose stack..."
+    cd /tmp && docker compose -f docker-compose.yml up -d
+    
+    if [ $? -eq 0 ]; then
+      log "Docker Compose stack deployed successfully"
+    else
+      log "Failed to deploy Docker Compose stack"
+      echo "To deploy manually, copy the Docker Compose config and run it with docker compose"
+    fi
+  else
+    echo "To deploy manually, copy the Docker Compose configuration and create a docker-compose.yml file"
+    read -p "Press Enter once you've deployed the containers manually..."
+  fi
 fi
 
-printf 'Access your services:\n'
-printf '  Zurg: http://%s:9999/dav/\n' "$LOCAL_IP"
-if [[ "$INSTALL_OVERSEERR" == "true" ]]; then
-    printf '  Overseerr: http://%s:5055\n' "$LOCAL_IP"
+echo "Waiting for Docker containers to initialize..."
+sleep 10
+
+log "Testing rclone connection to Zurg..."
+if rclone lsd zurg-wd: --verbose 2>&1; then
+  log "Rclone connection successful!"
+else
+  log "Rclone connection test failed. Restarting service..."
+  systemctl restart zurg-rclone.service
+  sleep 5
+  
+  if rclone lsd zurg-wd: --verbose 2>&1; then
+    log "Rclone connection successful after restart!"
+  else
+    log "Rclone connection still failing. You may need to troubleshoot:"
+    log "- Check if Zurg container is running: docker ps | grep zurg"
+    log "- Check Zurg logs: docker logs zurg"
+    log "- Try restarting rclone manually: systemctl restart zurg-rclone"
+  fi
 fi
-printf '  cli_debrid: http://%s:5000\n' "$LOCAL_IP"
-printf '  Plex Media Directory: /mnt\n' 
+
+echo
+echo "========================================================================"
+echo "                      Setup Complete!                                   "
+echo "========================================================================"
+echo
+echo "Service Access Information:"
+echo "-------------------------------------------------------------------------"
+echo "Zurg:                  http://${IP}:9999/dav/"
+echo "cli_debrid:            http://${IP}:5000"
+
+if [[ "$MEDIA_SERVER" == "plex" ]]; then
+  echo "Plex:                  http://${IP}:32400/web"
+elif [[ "$MEDIA_SERVER" == "jellyfin" ]]; then
+  echo "Jellyfin:              http://${IP}:8096"
+elif [[ "$MEDIA_SERVER" == "emby" ]]; then
+  echo "Emby:                  http://${IP}:8096"
+fi
+
+if [[ "$REQUEST_MANAGER" != "none" ]]; then
+  echo "${REQUEST_MANAGER^}:           http://${IP}:5055"
+fi
+
+echo "-------------------------------------------------------------------------"
+echo "Media Directory:        /mnt"
+echo "Mounted Content:        /mnt/zurg"
+echo "Symlinked Directory:    /mnt/symlinked"
+echo "Configuration Paths:"
+echo "  Zurg Config:          /home/config.yml"
+echo "  Webhook Script:       /home/plex_update.sh"
+echo "  cli_debrid Config:    /user/config/settings.json" 
+echo "  cli_debrid Logs:      /user/logs/debug.log"
+echo "-------------------------------------------------------------------------"
+echo "NOTE: It may take some time for media to appear. Please be patient."
+echo "========================================================================"
+
+echo "Would you like to reboot your system now?"
+read -p "y/N: " REBOOT_CHOICE
+REBOOT_CHOICE=${REBOOT_CHOICE:-n}
+
+if [[ "${REBOOT_CHOICE,,}" == "y" || "${REBOOT_CHOICE,,}" == "yes" ]]; then
+  log "Rebooting system..."
+  reboot
+else
+  log "Reboot skipped. You may need to reboot manually for all changes to take effect."
+fi
