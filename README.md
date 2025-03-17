@@ -15,7 +15,7 @@ This script automates the setup of a complete media streaming stack using Real-D
 
 Run the following command to download, make executable, and execute the script in one go:
 sudo curl -sO https://raw.githubusercontent.com/delete2020/cli_debrid-setup-/main/setup.sh && sudo chmod +x setup.sh && sudo ./setup.sh
-Components Installed
+
 The script will guide you through selecting and installing:
 
 Zurg: Bridge between Real-Debrid and your media server
