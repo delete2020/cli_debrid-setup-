@@ -1,33 +1,82 @@
 #!/bin/bash
+
 # Debrid Media Stack Setup Script
-# This script sets up a complete media streaming stack using Real-Debrid
+#
+# Instructions:
+# 1. Copy the entire script below.
+# 2. Paste it into a new file on your server (e.g., `nano setup.sh`).
+# 3. Make the script executable: `chmod +x setup.sh`
+# 4. Run the script as root: `sudo ./setup.sh`
+#
+# This script will:
+# - Install rclone, Docker, and Docker Compose.
+# - Configure rclone for WebDAV access to Zurg.
+# - Set up a systemd service for the rclone mount.
+# - Optionally install Portainer for easy Docker management.
+# - Pull Docker images for Zurg, your chosen media server, cli_debrid, and optional components.
+# - Create configuration files for Zurg and cli_debrid.
+# - Provide a Docker Compose configuration for deployment.
+# - Test the Zurg API and rclone connection.
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
 
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"
+}
+
+success() {
+  echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] ✓ $*${NC}"
+}
+
+warning() {
+  echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ $*${NC}"
+}
+
+error() {
+  echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ✗ $*${NC}"
+}
+
+header() {
+  echo -e "\n${BOLD}${MAGENTA}$*${NC}\n"
 }
 
 if [[ $(id -u) -ne 0 ]]; then
-  echo "This script must be run as root. Try: sudo $0"
+  error "This script must be run as root. Try: sudo $0"
   exit 1
 fi
 
+echo -e "${BOLD}${CYAN}"
+echo "┌───────────────────────────────────────────────────┐"
+echo "│         Debrid Media Stack Setup Script           │"
+echo "└───────────────────────────────────────────────────┘"
+echo -e "${NC}"
+
 mkdir -p /user/logs /user/config /user/db_content
 mkdir -p /mnt/zurg /mnt/symlinked
+mkdir -p /jackett/config
 mkdir -p /root/.config/rclone
 touch /user/logs/debug.log
 
-log "Created directory structure"
+success "Created directory structure"
 
 if command -v docker &>/dev/null; then
-  containers=("zurg" "cli_debrid" "plex" "jellyfin" "emby" "overseerr" "jellyseerr")
+  containers=("zurg" "cli_debrid" "plex" "jellyfin" "emby" "overseerr" "jellyseerr" "jackett" "flaresolverr")
   for container in "${containers[@]}"; do
     if docker ps -a -q -f name="$container" | grep -q .; then
-      echo "Container '$container' already exists."
+      echo -e "Container '${CYAN}$container${NC}' already exists."
       read -p "Remove it? (y/n): " REMOVE
       if [[ "${REMOVE,,}" == "y" ]]; then
         docker stop "$container" 2>/dev/null
         docker rm "$container" 2>/dev/null
-        log "Removed container: $container"
+        success "Removed container: $container"
       else
         log "Keeping container: $container"
       fi
@@ -42,9 +91,10 @@ else
   ARCHITECTURE_TYPE="amd64"
 fi
 
-log "System architecture detected: $ARCHITECTURE ($ARCHITECTURE_TYPE)"
+log "System architecture detected: ${CYAN}$ARCHITECTURE${NC} (${CYAN}$ARCHITECTURE_TYPE${NC})"
 
-echo "It is recommended to use the 'dev' image for cli_debrid for the latest features."
+header "CLI Debrid Image Selection"
+echo -e "It is recommended to use the '${BOLD}dev${NC}' image for cli_debrid for the latest features."
 echo "1) Standard (main)"
 echo "2) Development (dev) - Recommended"
 read -p "Select option [2]: " CLI_CHOICE
@@ -53,21 +103,22 @@ CLI_CHOICE=${CLI_CHOICE:-2}
 if [[ "$CLI_CHOICE" == "1" ]]; then
   if [[ "$ARCHITECTURE_TYPE" == "arm64" ]]; then
     CLI_DEBRID_IMAGE="godver3/cli_debrid:main-arm64"
-    log "Selected ARM64 main image: godver3/cli_debrid:main-arm64"
+    success "Selected ARM64 main image: ${CYAN}godver3/cli_debrid:main-arm64${NC}"
   else
     CLI_DEBRID_IMAGE="godver3/cli_debrid:main"
-    log "Selected AMD64 main image: godver3/cli_debrid:main"
+    success "Selected AMD64 main image: ${CYAN}godver3/cli_debrid:main${NC}"
   fi
 else
   if [[ "$ARCHITECTURE_TYPE" == "arm64" ]]; then
     CLI_DEBRID_IMAGE="godver3/cli_debrid:dev-arm64"
-    log "Selected ARM64 dev image: godver3/cli_debrid:dev-arm64"
+    success "Selected ARM64 dev image: ${CYAN}godver3/cli_debrid:dev-arm64${NC}"
   else
     CLI_DEBRID_IMAGE="godver3/cli_debrid:dev"
-    log "Selected AMD64 dev image: godver3/cli_debrid:dev"
+    success "Selected AMD64 dev image: ${CYAN}godver3/cli_debrid:dev${NC}"
   fi
 fi
 
+header "Media Server Selection"
 echo "Choose a media server to install:"
 echo "1) Plex"
 echo "2) Jellyfin"
@@ -81,19 +132,19 @@ case "$MEDIA_CHOICE" in
     MEDIA_SERVER="plex"
     MEDIA_SERVER_IMAGE="lscr.io/linuxserver/plex:latest"
     MEDIA_SERVER_PORT="32400"
-    log "Selected media server: Plex"
+    success "Selected media server: ${CYAN}Plex${NC}"
     ;;
   2)
     MEDIA_SERVER="jellyfin"
     MEDIA_SERVER_IMAGE="lscr.io/linuxserver/jellyfin:latest"
     MEDIA_SERVER_PORT="8096"
-    log "Selected media server: Jellyfin"
+    success "Selected media server: ${CYAN}Jellyfin${NC}"
     ;;
   3)
     MEDIA_SERVER="emby"
     MEDIA_SERVER_IMAGE="lscr.io/linuxserver/emby:latest" 
     MEDIA_SERVER_PORT="8096"
-    log "Selected media server: Emby"
+    success "Selected media server: ${CYAN}Emby${NC}"
     ;;
   *)
     MEDIA_SERVER="none"
@@ -101,6 +152,7 @@ case "$MEDIA_CHOICE" in
     ;;
 esac
 
+header "Request Manager Selection"
 echo "Choose a request manager to install:"
 echo "1) Overseerr (works best with Plex)"
 echo "2) Jellyseerr (works best with Jellyfin)"
@@ -113,13 +165,13 @@ case "$REQUEST_CHOICE" in
     REQUEST_MANAGER="overseerr"
     REQUEST_MANAGER_IMAGE="lscr.io/linuxserver/overseerr:latest"
     REQUEST_MANAGER_PORT="5055"
-    log "Selected request manager: Overseerr"
+    success "Selected request manager: ${CYAN}Overseerr${NC}"
     ;;
   2)
     REQUEST_MANAGER="jellyseerr"
     REQUEST_MANAGER_IMAGE="fallenbagel/jellyseerr:latest"
     REQUEST_MANAGER_PORT="5055"
-    log "Selected request manager: Jellyseerr"
+    success "Selected request manager: ${CYAN}Jellyseerr${NC}"
     ;;
   *)
     REQUEST_MANAGER="none"
@@ -127,43 +179,72 @@ case "$REQUEST_CHOICE" in
     ;;
 esac
 
+header "Torrent Indexer Setup"
+echo "Do you want to install Jackett for torrent indexer integration?"
+read -p "Y/n: " JACKETT_CHOICE
+JACKETT_CHOICE=${JACKETT_CHOICE:-y}
+
+if [[ "${JACKETT_CHOICE,,}" == "y" || "${JACKETT_CHOICE,,}" == "yes" ]]; then
+  INSTALL_JACKETT=true
+  success "Jackett will be installed"
+  
+  echo "Do you want to install FlareSolverr to help Jackett access Cloudflare-protected sites?"
+  read -p "Y/n: " FLARESOLVERR_CHOICE
+  FLARESOLVERR_CHOICE=${FLARESOLVERR_CHOICE:-y}
+  
+  if [[ "${FLARESOLVERR_CHOICE,,}" == "y" || "${FLARESOLVERR_CHOICE,,}" == "yes" ]]; then
+    INSTALL_FLARESOLVERR=true
+    success "FlareSolverr will be installed"
+  else
+    INSTALL_FLARESOLVERR=false
+    log "Skipping FlareSolverr installation"
+  fi
+else
+  INSTALL_JACKETT=false
+  INSTALL_FLARESOLVERR=false
+  log "Skipping Jackett installation"
+fi
+
+header "Docker Management"
 echo "Do you want to install Portainer for Docker management?"
 read -p "Y/n: " PORTAINER_CHOICE
 PORTAINER_CHOICE=${PORTAINER_CHOICE:-y}
 
 if [[ "${PORTAINER_CHOICE,,}" == "y" || "${PORTAINER_CHOICE,,}" == "yes" ]]; then
   INSTALL_PORTAINER=true
-  log "Portainer will be installed"
+  success "Portainer will be installed"
 else
   INSTALL_PORTAINER=false
   log "Skipping Portainer installation"
 fi
 
+header "System Configuration"
 SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
-echo "Current system timezone: $SYSTEM_TIMEZONE"
+echo -e "Current system timezone: ${CYAN}${SYSTEM_TIMEZONE}${NC}"
 read -p "Enter timezone (leave blank for system timezone): " CUSTOM_TIMEZONE
 TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
-log "Using timezone: $TIMEZONE"
+log "Using timezone: ${CYAN}${TIMEZONE}${NC}"
 
-echo "Enter Real-Debrid API key (will remain on your system): "
+echo -e "${YELLOW}Enter Real-Debrid API key${NC} (will remain on your system): "
 read -s RD_API_KEY
 echo
-log "Real-Debrid API key received"
+success "Real-Debrid API key received"
 
 IP=""
 read -p "Enter server IP (blank for auto-detect): " IP
 if [[ -z "$IP" ]]; then
   IP=$(ip route get 1 | awk '{print $(NF-2);exit}')
-  log "Detected IP: $IP"
+  success "Detected IP: ${CYAN}$IP${NC}"
 fi
 
 if [[ ! "$IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-  log "Invalid IP format. Using localhost."
+  warning "Invalid IP format. Using localhost."
   IP="127.0.0.1"
 fi
 
-log "Using server IP: $IP"
+log "Using server IP: ${CYAN}$IP${NC}"
 
+header "Installing Prerequisites"
 if ! command -v docker &>/dev/null; then
   log "Installing Docker..."
   apt update
@@ -175,29 +256,30 @@ if ! command -v docker &>/dev/null; then
 fi
 
 if ! command -v docker &>/dev/null; then
-  log "Failed to install Docker. Exiting."
+  error "Failed to install Docker. Exiting."
   exit 1
 fi
 
-log "Docker is installed"
+success "Docker is installed"
 
 if ! command -v rclone &>/dev/null; then
   log "Installing rclone..."
   curl https://rclone.org/install.sh | bash
   
   if ! command -v rclone &>/dev/null; then
-    log "Rclone install script failed. Trying apt installation..."
+    warning "Rclone install script failed. Trying apt installation..."
     apt update && apt install -y rclone
   fi
 fi
 
 if ! command -v rclone &>/dev/null; then
-  log "Failed to install rclone. Exiting."
+  error "Failed to install rclone. Exiting."
   exit 1
 fi
 
-log "rclone is installed"
+success "rclone is installed"
 
+header "Configuring Services"
 log "Configuring rclone..."
 cat > "/root/.config/rclone/rclone.conf" <<EOF
 [zurg-wd]
@@ -253,7 +335,7 @@ log "Enabling and starting rclone service..."
 systemctl daemon-reload
 systemctl enable zurg-rclone.service
 systemctl start zurg-rclone.service
-log "Rclone service started (will connect once Zurg is running)"
+success "Rclone service started (will connect once Zurg is running)"
 
 log "Configuring Zurg..."
 cat > "/home/plex_update.sh" <<EOF
@@ -331,24 +413,24 @@ pull_docker_image() {
   local retry_delay=5
   
   if docker inspect "$image" &>/dev/null; then
-    log "Image '$image' exists. Skipping pull."
+    log "Image '${CYAN}$image${NC}' exists. Skipping pull."
     return 0
   fi
   
-  log "Pulling Docker image: $image"
+  log "Pulling Docker image: ${CYAN}$image${NC}"
   
   for ((i=1; i<=max_retries; i++)); do
     if docker pull "$image"; then
-      log "Successfully pulled image: $image"
+      success "Successfully pulled image: ${CYAN}$image${NC}"
       return 0
     fi
     
-    log "Pull attempt $i/$max_retries failed. Retrying in $retry_delay seconds..."
+    warning "Pull attempt $i/$max_retries failed. Retrying in $retry_delay seconds..."
     sleep "$retry_delay"
   done
   
-  log "Warning: Failed to pull image '$image' after $max_retries attempts."
-  echo "Options:"
+  warning "Failed to pull image '${CYAN}$image${NC}' after $max_retries attempts."
+  echo -e "${YELLOW}Options:${NC}"
   echo "1) Continue anyway"
   echo "2) Retry pulling the image"
   echo "3) Exit setup"
@@ -357,7 +439,7 @@ pull_docker_image() {
   
   case "$PULL_CHOICE" in
     1)
-      log "Continuing without image: $image"
+      log "Continuing without image: ${CYAN}$image${NC}"
       return 1
       ;;
     2)
@@ -365,12 +447,13 @@ pull_docker_image() {
       pull_docker_image "$image" $((max_retries + 5)) $((retry_delay + 5))
       ;;
     3|*)
-      log "Exiting at user request."
+      error "Exiting at user request."
       exit 1
       ;;
   esac
 }
 
+header "Pulling Docker Images"
 log "Pulling required Docker images..."
 pull_docker_image "ghcr.io/debridmediamanager/zurg-testing:latest"
 pull_docker_image "$CLI_DEBRID_IMAGE"
@@ -383,6 +466,14 @@ if [[ "$REQUEST_MANAGER" != "none" ]]; then
   pull_docker_image "$REQUEST_MANAGER_IMAGE"
 fi
 
+if [[ "$INSTALL_JACKETT" == "true" ]]; then
+  pull_docker_image "linuxserver/jackett:latest"
+fi
+
+if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+  pull_docker_image "ghcr.io/flaresolverr/flaresolverr:latest"
+fi
+
 if [[ "$INSTALL_PORTAINER" == "true" ]]; then
   if ! docker ps -q -f name=portainer | grep -q .; then
     log "Installing Portainer..."
@@ -393,15 +484,16 @@ if [[ "$INSTALL_PORTAINER" == "true" ]]; then
       -v portainer_data:/data portainer/portainer-ce:latest
     
     if docker ps -q -f name=portainer | grep -q .; then
-      log "Portainer installed successfully at https://${IP}:9443"
+      success "Portainer installed successfully at ${CYAN}https://${IP}:9443${NC}"
     else 
-      log "Failed to start Portainer"
+      error "Failed to start Portainer"
     fi
   else
     log "Portainer is already running"
   fi
 fi
 
+header "Generating Docker Compose Configuration"
 log "Generating Docker Compose file..."
 DOCKER_COMPOSE_FILE="/tmp/docker-compose.yml"
 
@@ -501,16 +593,51 @@ if [[ "$REQUEST_MANAGER" != "none" ]]; then
 EOF
 fi
 
-log "Docker Compose file generated"
+if [[ "$INSTALL_JACKETT" == "true" ]]; then
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
 
-echo 
-echo "Docker Compose Configuration:"
-echo "-----------------------------------------------------------------------"
+  jackett:
+    image: linuxserver/jackett:latest
+    container_name: jackett
+    restart: unless-stopped
+    ports:
+      - "9117:9117"
+    volumes:
+      - /jackett/config:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TIMEZONE}
+      - AUTO_UPDATE=true
+EOF
+fi
+
+if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    ports:
+      - "8191:8191"
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TIMEZONE}
+      - CAPTCHA_SOLVER=none
+EOF
+fi
+
+success "Docker Compose file generated"
+
+echo -e "\n${CYAN}${BOLD}Docker Compose Configuration:${NC}"
+echo -e "${MAGENTA}-----------------------------------------------------------------------${NC}"
 cat "$DOCKER_COMPOSE_FILE"
-echo "-----------------------------------------------------------------------"
+echo -e "${MAGENTA}-----------------------------------------------------------------------${NC}"
 
+header "Deploying Containers"
 if [[ "$INSTALL_PORTAINER" == "true" ]]; then
-  echo "Please go to Portainer in your web browser: https://${IP}:9443"
+  echo -e "Please go to Portainer in your web browser: ${CYAN}https://${IP}:9443${NC}"
   echo "Create a new stack and import the Docker Compose configuration shown above."
   read -p "Press Enter once you've deployed the stack in Portainer..."
 else
@@ -523,9 +650,9 @@ else
     cd /tmp && docker compose -f docker-compose.yml up -d
     
     if [ $? -eq 0 ]; then
-      log "Docker Compose stack deployed successfully"
+      success "Docker Compose stack deployed successfully"
     else
-      log "Failed to deploy Docker Compose stack"
+      error "Failed to deploy Docker Compose stack"
       echo "To deploy manually, copy the Docker Compose config and run it with docker compose"
     fi
   else
@@ -539,58 +666,80 @@ sleep 10
 
 log "Testing rclone connection to Zurg..."
 if rclone lsd zurg-wd: --verbose 2>&1; then
-  log "Rclone connection successful!"
+  success "Rclone connection successful!"
 else
-  log "Rclone connection test failed. Restarting service..."
+  warning "Rclone connection test failed. Restarting service..."
   systemctl restart zurg-rclone.service
   sleep 5
   
   if rclone lsd zurg-wd: --verbose 2>&1; then
-    log "Rclone connection successful after restart!"
+    success "Rclone connection successful after restart!"
   else
-    log "Rclone connection still failing. You may need to troubleshoot:"
-    log "- Check if Zurg container is running: docker ps | grep zurg"
-    log "- Check Zurg logs: docker logs zurg"
-    log "- Try restarting rclone manually: systemctl restart zurg-rclone"
+    warning "Rclone connection still failing. You may need to troubleshoot:"
+    log "- Check if Zurg container is running: ${CYAN}docker ps | grep zurg${NC}"
+    log "- Check Zurg logs: ${CYAN}docker logs zurg${NC}"
+    log "- Try restarting rclone manually: ${CYAN}systemctl restart zurg-rclone${NC}"
   fi
 fi
 
 echo
-echo "========================================================================"
-echo "                      Setup Complete!                                   "
-echo "========================================================================"
+echo -e "${BOLD}${GREEN}=========================================================================${NC}"
+echo -e "${BOLD}${CYAN}                      Setup Complete!                                   ${NC}"
+echo -e "${BOLD}${GREEN}=========================================================================${NC}"
 echo
-echo "Service Access Information:"
-echo "-------------------------------------------------------------------------"
-echo "Zurg:                  http://${IP}:9999/dav/"
-echo "cli_debrid:            http://${IP}:5000"
+echo -e "${BOLD}Service Access Information:${NC}"
+echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+echo -e "Zurg:                  ${CYAN}http://${IP}:9999/dav/${NC}"
+echo -e "cli_debrid:            ${CYAN}http://${IP}:5000${NC}"
 
 if [[ "$MEDIA_SERVER" == "plex" ]]; then
-  echo "Plex:                  http://${IP}:32400/web"
+  echo -e "Plex:                  ${CYAN}http://${IP}:32400/web${NC}"
 elif [[ "$MEDIA_SERVER" == "jellyfin" ]]; then
-  echo "Jellyfin:              http://${IP}:8096"
+  echo -e "Jellyfin:              ${CYAN}http://${IP}:8096${NC}"
 elif [[ "$MEDIA_SERVER" == "emby" ]]; then
-  echo "Emby:                  http://${IP}:8096"
+  echo -e "Emby:                  ${CYAN}http://${IP}:8096${NC}"
 fi
 
 if [[ "$REQUEST_MANAGER" != "none" ]]; then
-  echo "${REQUEST_MANAGER^}:           http://${IP}:5055"
+  echo -e "${REQUEST_MANAGER^}:           ${CYAN}http://${IP}:5055${NC}"
 fi
 
-echo "-------------------------------------------------------------------------"
-echo "Media Directory:        /mnt"
-echo "Mounted Content:        /mnt/zurg"
-echo "Symlinked Directory:    /mnt/symlinked"
-echo "Configuration Paths:"
-echo "  Zurg Config:          /home/config.yml"
-echo "  Webhook Script:       /home/plex_update.sh"
-echo "  cli_debrid Config:    /user/config/settings.json" 
-echo "  cli_debrid Logs:      /user/logs/debug.log"
-echo "-------------------------------------------------------------------------"
-echo "NOTE: It may take some time for media to appear. Please be patient."
-echo "========================================================================"
+if [[ "$INSTALL_JACKETT" == "true" ]]; then
+  echo -e "Jackett:               ${CYAN}http://${IP}:9117${NC}"
+fi
 
-echo "Would you like to reboot your system now?"
+if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+  echo -e "FlareSolverr:          ${CYAN}http://${IP}:8191${NC}"
+fi
+
+echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+echo -e "Media Directory:        ${CYAN}/mnt${NC}"
+echo -e "Mounted Content:        ${CYAN}/mnt/zurg${NC}"
+echo -e "Symlinked Directory:    ${CYAN}/mnt/symlinked${NC}"
+echo -e "Configuration Paths:"
+echo -e "  Zurg Config:          ${CYAN}/home/config.yml${NC}"
+echo -e "  Webhook Script:       ${CYAN}/home/plex_update.sh${NC}"
+echo -e "  cli_debrid Config:    ${CYAN}/user/config/settings.json${NC}" 
+echo -e "  cli_debrid Logs:      ${CYAN}/user/logs/debug.log${NC}"
+if [[ "$INSTALL_JACKETT" == "true" ]]; then
+  echo -e "  Jackett Config:       ${CYAN}/jackett/config${NC}"
+fi
+echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+echo -e "${YELLOW}NOTE: It may take some time for media to appear. Please be patient.${NC}"
+if [[ "$INSTALL_JACKETT" == "true" ]]; then
+  echo -e "${YELLOW}NOTE: Configure Jackett at http://${IP}:9117${NC}"
+  echo -e "      - Get the API Key from the Jackett web interface"
+  echo -e "      - Configure your preferred indexers in Jackett"
+  echo -e "      - Use the API Key to connect your media applications to Jackett"
+  
+  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+    echo -e "      - In Jackett, go to Settings and set FlareSolverr API URL to: ${CYAN}http://${IP}:8191${NC}"
+    echo -e "      - This allows Jackett to bypass Cloudflare protection on supported indexers"
+  fi
+fi
+echo -e "${MAGENTA}==========================================================================${NC}"
+
+echo -e "\n${YELLOW}Would you like to reboot your system now?${NC}"
 read -p "y/N: " REBOOT_CHOICE
 REBOOT_CHOICE=${REBOOT_CHOICE:-n}
 
