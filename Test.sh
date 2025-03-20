@@ -173,34 +173,78 @@ install_prerequisites() {
   log "Installing common prerequisites..."
   eval "$PKG_INSTALL $COMMON_PACKAGES" || warning "Failed to install some common packages."
   
+  # Check for existing FUSE setup
+  FUSE3_INSTALLED=false
+  FUSE_INSTALLED=false
+  
+  if command -v fusermount3 &>/dev/null || [ -f "/usr/lib/libfuse3.so.3" ] || [ -f "/usr/lib64/libfuse3.so.3" ]; then
+    FUSE3_INSTALLED=true
+    success "FUSE3 is already installed"
+  fi
+  
+  if command -v fusermount &>/dev/null || [ -f "/usr/lib/libfuse.so.2" ] || [ -f "/usr/lib64/libfuse.so.2" ]; then
+    FUSE_INSTALLED=true
+    log "Legacy FUSE is installed"
+  fi
+  
   # Distribution-specific packages
   case $OS_ID in
     debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|deepin)
       log "Installing Debian/Ubuntu specific packages..."
-      eval "$PKG_INSTALL apt-transport-https ca-certificates gnupg lsb-release fuse3 fuse" || warning "Failed to install some Debian/Ubuntu specific packages."
+      eval "$PKG_INSTALL apt-transport-https ca-certificates gnupg lsb-release" || warning "Failed to install some Debian/Ubuntu specific packages."
+      
+      # Only try to install FUSE3 if it's not already installed
+      if [ "$FUSE3_INSTALLED" = false ]; then
+        log "Attempting to install FUSE3..."
+        if eval "$PKG_INSTALL fuse3"; then
+          success "FUSE3 installed successfully"
+          FUSE3_INSTALLED=true
+        else
+          warning "Could not install FUSE3. Will use existing FUSE if available."
+        fi
+      fi
       ;;
     fedora|rhel|centos|rocky|almalinux|ol|scientific|amazon)
       log "Installing RHEL/Fedora specific packages..."
-      eval "$PKG_INSTALL dnf-plugins-core fuse3 fuse" || warning "Failed to install some RHEL/Fedora specific packages."
+      eval "$PKG_INSTALL dnf-plugins-core" || warning "Failed to install some RHEL/Fedora specific packages."
+      
+      # Only try to install FUSE3 if it's not already installed
+      if [ "$FUSE3_INSTALLED" = false ]; then
+        eval "$PKG_INSTALL fuse3" || warning "Failed to install FUSE3. Will use existing FUSE if available."
+      fi
       ;;
     arch|manjaro|endeavouros)
       log "Installing Arch specific packages..."
-      eval "$PKG_INSTALL fuse3 fuse2" || warning "Failed to install some Arch specific packages."
+      if [ "$FUSE3_INSTALLED" = false ]; then
+        eval "$PKG_INSTALL fuse3" || warning "Failed to install FUSE3. Will use existing FUSE if available."
+      fi
       ;;
     opensuse*|suse|sles)
       log "Installing openSUSE specific packages..."
-      eval "$PKG_INSTALL fuse3 fuse" || warning "Failed to install some openSUSE specific packages."
+      if [ "$FUSE3_INSTALLED" = false ]; then
+        eval "$PKG_INSTALL fuse3" || warning "Failed to install FUSE3. Will use existing FUSE if available."
+      fi
       ;;
     alpine)
       log "Installing Alpine specific packages..."
-      eval "$PKG_INSTALL fuse3 fuse" || warning "Failed to install some Alpine specific packages."
+      if [ "$FUSE3_INSTALLED" = false ]; then
+        eval "$PKG_INSTALL fuse3" || warning "Failed to install FUSE3. Will use existing FUSE if available."
+      fi
       ;;
   esac
   
   # Ensure FUSE modules are loaded
   if ! lsmod | grep -q fuse; then
     log "Loading FUSE kernel module..."
-    modprobe fuse
+    modprobe fuse 2>/dev/null || warning "Could not load FUSE kernel module. May need reboot or kernel support."
+  fi
+  
+  if [ "$FUSE3_INSTALLED" = true ]; then
+    log "Using FUSE3 for optimal performance"
+  elif [ "$FUSE_INSTALLED" = true ]; then
+    warning "Using legacy FUSE. Consider upgrading to FUSE3 for better performance."
+  else
+    error "No FUSE system detected. Mount functionality may not work correctly."
   fi
   
   success "Base prerequisites installed"
@@ -645,14 +689,7 @@ pacer_min_sleep = 10ms
 pacer_burst = 0
 EOF
   
-  # Check if fuse3 is available
-  FUSE3_AVAILABLE=false
-  if command -v fusermount3 &>/dev/null; then
-    FUSE3_AVAILABLE=true
-    log "FUSE3 detected - using optimal mount parameters"
-  fi
-
-  # Create systemd service for rclone
+  # Create systemd service for rclone with appropriate FUSE version
   cat > "/etc/systemd/system/zurg-rclone.service" <<EOF
 [Unit]
 Description=Rclone mount for zurg
@@ -685,22 +722,19 @@ ExecStart=/usr/bin/rclone mount \\
   --exclude="**sample**" \\
 EOF
 
-  # Add FUSE version-specific parameters
-  if [ "$FUSE3_AVAILABLE" = true ]; then
+  # Add FUSE3-specific options if available
+  if [ "$FUSE3_INSTALLED" = true ]; then
     cat >> "/etc/systemd/system/zurg-rclone.service" <<EOF
   --async-read=true \\
   --use-mmap \\
   --fuse-flag=sync_read \\
 EOF
-    FUSERMOUNT_CMD="fusermount3"
-  else
-    FUSERMOUNT_CMD="fusermount"
   fi
 
-  # Add remaining configuration
+  # Complete the service file
   cat >> "/etc/systemd/system/zurg-rclone.service" <<EOF
   zurg-wd: /mnt/zurg
-ExecStop=/bin/bash -c '/bin/${FUSERMOUNT_CMD} -uz /mnt/zurg'
+ExecStop=/bin/bash -c 'fusermount3 -uz /mnt/zurg 2>/dev/null || fusermount -uz /mnt/zurg 2>/dev/null || umount -l /mnt/zurg'
 Restart=on-abort
 RestartSec=1
 StartLimitInterval=60s
