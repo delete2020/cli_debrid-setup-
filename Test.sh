@@ -547,11 +547,35 @@ restore_system() {
   return 0
 }
 
-# Setup configuration for Zurg and cli_debrid
-setup_configs() {
-  log "Setting up configuration files..."
+# Function to get Real-Debrid API key
+get_rd_api_key() {
+  # Check for existing API key in config files
+  local EXISTING_KEY=""
   
-  # Get Real-Debrid API key
+  # Try to extract from Zurg config.yml
+  if [ -f "/home/config.yml" ]; then
+    EXISTING_KEY=$(grep -oP 'token: \K.*' /home/config.yml 2>/dev/null)
+  fi
+  
+  # If not found, try cli_debrid settings.json
+  if [ -z "$EXISTING_KEY" ] && [ -f "/user/config/settings.json" ]; then
+    EXISTING_KEY=$(grep -oP '"api_key": "\K[^"]*' /user/config/settings.json 2>/dev/null)
+  fi
+  
+  # If an existing key was found, ask if user wants to use it
+  if [ -n "$EXISTING_KEY" ]; then
+    echo -e "${CYAN}Existing Real-Debrid API key found.${NC}"
+    read -p "Use existing key? (Y/n): " USE_EXISTING
+    USE_EXISTING=${USE_EXISTING:-y}
+    
+    if [[ "${USE_EXISTING,,}" == "y" || "${USE_EXISTING,,}" == "yes" ]]; then
+      RD_API_KEY="$EXISTING_KEY"
+      success "Using existing Real-Debrid API key"
+      return 0
+    fi
+  fi
+  
+  # No existing key or user wants to enter a new one
   echo -e "${YELLOW}Enter Real-Debrid API key${NC} (will remain on your system): "
   read -s RD_API_KEY
   echo
@@ -562,6 +586,8 @@ setup_configs() {
   fi
   
   success "Real-Debrid API key received"
+  return 0
+}
   
   # Get server IP address
   IP=""
@@ -964,6 +990,16 @@ show_main_menu() {
         warning "Invalid option. Please select a valid option."
         ;;
     esac
+    
+    # Ask if user wants to continue with the menu or exit
+    echo
+    read -p "Return to main menu? (y/N): " CONTINUE_MENU
+    CONTINUE_MENU=${CONTINUE_MENU:-n}
+    
+    if [[ "${CONTINUE_MENU,,}" != "y" && "${CONTINUE_MENU,,}" != "yes" ]]; then
+      log "Exiting setup script"
+      exit 0
+    fi
   done
 }
 
@@ -1034,6 +1070,11 @@ install_new_setup() {
 update_existing_setup() {
   header "Update Existing Setup"
   
+  # Get Real-Debrid API key
+  if ! get_rd_api_key; then
+    return 1
+  fi
+  
   # Backup current setup
   backup_system
   
@@ -1097,6 +1138,11 @@ update_existing_setup() {
 # Repair installation
 repair_installation() {
   header "Repairing Installation"
+  
+  # Get Real-Debrid API key
+  if ! get_rd_api_key; then
+    return 1
+  fi
   
   # Check Docker
   if ! command -v docker &>/dev/null; then
