@@ -1,13 +1,14 @@
 ## Debrid Media Stack Setup Script
 
-Cross-distribution Compatibility: Works across Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, and more
-Backup & Restore Functionality: Create and restore complete system backups
-VPS Detection & Optimization: Automatically optimizes settings for VPS environments
-Improved Error Handling: Robust validation and recovery mechanisms
-Advanced rclone Deployment: Enhanced FUSE integration with fallback options
-Automatic Updates: Container updates via Watchtower integration
-Portainer Support: Proper detection and integration with Portainer
-DMB All-in-One Option: New option to install Debrid Media Bridge with integrated components
+## Cross-distribution Compatibility: Works across Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, and more
+
+## Backup & Restore Functionality: Create and restore complete system backups
+## VPS Detection & Optimization: Automatically optimizes settings for VPS environments
+## Improved Error Handling: Robust validation and recovery mechanisms
+## Advanced rclone Deployment: Enhanced FUSE integration with fallback options
+## Automatic Updates: Container updates via Watchtower integration
+## Portainer Support: Proper detection and integration with Portainer
+## DMB All-in-One Option: New option to install Debrid Media Bridge with integrated components
 
 Installation Options
 Two installation paths are now available:
