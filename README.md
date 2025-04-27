@@ -1,7 +1,4 @@
-I'll update the script information for the Debrid Media Stack Setup Script. Here's the enhanced description:
-Debrid Media Stack Setup Script
-This enhanced setup script automates the deployment of a complete media streaming stack utilizing Real-Debrid, featuring multiple integrated components for a seamless experience.
-Key Features
+## Debrid Media Stack Setup Script
 
 Cross-distribution Compatibility: Works across Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, and more
 Backup & Restore Functionality: Create and restore complete system backups
