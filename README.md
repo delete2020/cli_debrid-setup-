@@ -18,7 +18,7 @@ DMB All-in-One: Integrated Debrid Media Bridge including Riven, plex_debrid, Zur
 
 Installation
 Run this command to download and execute the script:
-bashsudo curl -sO https://raw.githubusercontent.com/delete2020/cli_debrid-setup-/main/setup.sh && sudo chmod +x setup.sh && sudo ./setup.sh
+sudo curl -sO https://raw.githubusercontent.com/delete2020/cli_debrid-setup-/main/setup.sh && sudo chmod +x setup.sh && sudo ./setup.sh
 Components
 Core Components:
 
