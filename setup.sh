@@ -10,6 +10,8 @@
 # - Advanced rclone deployment checks
 # - Automatic updates via Watchtower
 # - Proper Portainer integration
+# - Selective container updates
+# - Discord webhook notifications
 
 # Colors
 RED='\033[0;31m'
@@ -23,6 +25,8 @@ NC='\033[0m' # No Color
 
 # Global variables
 SERVER_IP=""
+DISCORD_WEBHOOK_URL=""
+AUTO_UPDATE_CONTAINERS=()
 
 # Logging functions
 log() {
@@ -1059,6 +1063,83 @@ select_cli_image() {
   fi
 }
 
+# Function to select which containers to auto-update
+select_auto_update_containers() {
+  header "Select Containers for Auto-Updates"
+  
+  echo "Choose which containers you want Watchtower to automatically update:"
+  
+  # Define all possible containers
+  local all_containers=("zurg" "cli_debrid")
+  
+  if [[ "$MEDIA_SERVER" != "none" ]]; then
+    all_containers+=("$MEDIA_SERVER")
+  fi
+  
+  if [[ "$REQUEST_MANAGER" != "none" ]]; then
+    all_containers+=("$REQUEST_MANAGER")
+  fi
+  
+  if [[ "$INSTALL_JACKETT" == "true" ]]; then
+    all_containers+=("jackett")
+  fi
+  
+  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+    all_containers+=("flaresolverr")
+  fi
+  
+  # Add Watchtower itself
+  all_containers+=("watchtower")
+  
+  # Ask for each container
+  for container in "${all_containers[@]}"; do
+    read -p "Auto-update ${container}? (Y/n): " UPDATE_CHOICE
+    UPDATE_CHOICE=${UPDATE_CHOICE:-y}
+    
+    if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
+      AUTO_UPDATE_CONTAINERS+=("$container")
+      success "Added ${CYAN}${container}${NC} to auto-update list"
+    else
+      log "Excluded ${container} from auto-updates"
+    fi
+  done
+  
+  if [ ${#AUTO_UPDATE_CONTAINERS[@]} -eq 0 ]; then
+    warning "No containers selected for auto-updates. Watchtower will be installed but won't update any containers."
+  else
+    success "${#AUTO_UPDATE_CONTAINERS[@]} containers will be auto-updated"
+  fi
+}
+
+# Function to set up Discord webhook for Watchtower notifications
+setup_discord_notifications() {
+  header "Discord Webhook Notifications for Watchtower"
+  
+  echo "Do you want to receive Discord notifications when containers are updated?"
+  read -p "Y/n: " DISCORD_CHOICE
+  DISCORD_CHOICE=${DISCORD_CHOICE:-y}
+  
+  if [[ "${DISCORD_CHOICE,,}" == "y" || "${DISCORD_CHOICE,,}" == "yes" ]]; then
+    echo -e "${YELLOW}To set up Discord notifications, you need to:${NC}"
+    echo "1. Open your Discord server settings"
+    echo "2. Go to Integrations → Webhooks"
+    echo "3. Create a new webhook and copy the webhook URL"
+    echo -e "${YELLOW}Please enter your Discord webhook URL:${NC}"
+    read -p "> " DISCORD_WEBHOOK_URL
+    
+    if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+      warning "No webhook URL provided. Discord notifications will not be enabled."
+    elif [[ ! "$DISCORD_WEBHOOK_URL" == *"discord.com/api/webhooks/"* ]]; then
+      warning "Invalid Discord webhook URL format. Notifications will not be enabled."
+      DISCORD_WEBHOOK_URL=""
+    else
+      success "Discord webhook notifications will be enabled"
+    fi
+  else
+    log "Skipping Discord notifications setup"
+  fi
+}
+
 select_media_components() {
   # Select CLI image
   select_cli_image
@@ -1202,6 +1283,12 @@ select_media_components() {
         ;;
     esac
     
+    # Add container selection for auto-updates
+    select_auto_update_containers
+    
+    # Setup Discord notifications
+    setup_discord_notifications
+    
     success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
   else
     INSTALL_WATCHTOWER=false
@@ -1263,7 +1350,7 @@ generate_docker_compose() {
   # Ensure we have a valid IP address
   detect_server_ip
   
-    cat > "$DOCKER_COMPOSE_FILE" <<EOF
+  cat > "$DOCKER_COMPOSE_FILE" <<EOF
 version: "3.8"
 
 services:
@@ -1278,8 +1365,22 @@ services:
       - /home/plex_update.sh:/app/plex_update.sh
     environment:
       - TZ=${TIMEZONE}
+EOF
+
+  # Add auto-update label if selected
+  if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "zurg" ]]; then
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+EOF
+  else
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+  fi
+
+  cat >> "$DOCKER_COMPOSE_FILE" <<EOF
 
   cli_debrid:
     image: ${CLI_DEBRID_IMAGE}
@@ -1298,9 +1399,20 @@ services:
       - TZ=${TIMEZONE}
     depends_on:
       - zurg
+EOF
+
+  # Add auto-update label if selected
+  if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "cli_debrid" ]]; then
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 EOF
+  else
+    cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+  fi
   
   if [[ "$MEDIA_SERVER" != "none" ]]; then
     cat >> "$DOCKER_COMPOSE_FILE" <<EOF
@@ -1347,9 +1459,20 @@ EOF
     depends_on:
       cli_debrid:
         condition: service_started
+EOF
+
+    # Add auto-update label if selected
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "$MEDIA_SERVER" ]]; then
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 EOF
+    else
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
   fi
   
   if [[ "$REQUEST_MANAGER" != "none" ]]; then
@@ -1369,9 +1492,20 @@ EOF
       - TZ=${TIMEZONE}
     depends_on:
       - ${MEDIA_SERVER}
+EOF
+
+    # Add auto-update label if selected
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "$REQUEST_MANAGER" ]]; then
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 EOF
+    else
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
   fi
   
   if [[ "$INSTALL_JACKETT" == "true" ]]; then
@@ -1390,9 +1524,20 @@ EOF
       - PGID=1000
       - TZ=${TIMEZONE}
       - AUTO_UPDATE=true
+EOF
+
+    # Add auto-update label if selected
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "jackett" ]]; then
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 EOF
+    else
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
   fi
   
   if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
@@ -1408,9 +1553,20 @@ EOF
       - LOG_LEVEL=info
       - TZ=${TIMEZONE}
       - CAPTCHA_SOLVER=none
+EOF
+
+    # Add auto-update label if selected
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "flaresolverr" ]]; then
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 EOF
+    else
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
   fi
 
   if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
@@ -1431,6 +1587,35 @@ EOF
       - WATCHTOWER_LABEL_ENABLE=true
       - WATCHTOWER_ROLLING_RESTART=true
 EOF
+
+    # Add Discord notifications if configured
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      # Extract the webhook ID and token from the URL correctly
+      if [[ "$DISCORD_WEBHOOK_URL" =~ discord.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+) ]]; then
+        WEBHOOK_ID="${BASH_REMATCH[1]}"
+        WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
+        
+        cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=discord://${WEBHOOK_TOKEN}@${WEBHOOK_ID}
+EOF
+      else
+        warning "Invalid Discord webhook URL format. Notifications will not be enabled."
+      fi
+    fi
+
+    # Add auto-update label if selected
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "watchtower" ]]; then
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+EOF
+    else
+      cat >> "$DOCKER_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
   fi
   
   success "Docker Compose file generated"
@@ -1521,6 +1706,8 @@ update_existing_setup() {
   CLI_CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' cli_debrid 2>/dev/null)
   if [ -n "$CLI_CURRENT_IMAGE" ]; then
     docker pull "$CLI_CURRENT_IMAGE"
+    CLI_DEBRID_IMAGE="$CLI_CURRENT_IMAGE"  # Set this for use in docker-compose generation
+    success "Using existing CLI image: ${CYAN}$CLI_DEBRID_IMAGE${NC}"
   else
     warning "Could not determine current CLI image. User selection required."
     select_cli_image
@@ -1530,6 +1717,79 @@ update_existing_setup() {
   if docker ps -a -q -f name="watchtower" | grep -q .; then
     INSTALL_WATCHTOWER=true
     log "Watchtower exists. Will update it."
+    
+    # Ask user if they want to configure container selection for auto-updates
+    echo "Do you want to select which containers Watchtower should automatically update?"
+    read -p "y/N: " SELECT_CONTAINERS
+    SELECT_CONTAINERS=${SELECT_CONTAINERS:-n}
+    
+    if [[ "${SELECT_CONTAINERS,,}" == "y" || "${SELECT_CONTAINERS,,}" == "yes" ]]; then
+      # Determine which containers are in the setup
+      if docker ps -a -q -f name="zurg" | grep -q .; then
+        AUTO_UPDATE_CONTAINERS+=("zurg")
+      fi
+      
+      if docker ps -a -q -f name="cli_debrid" | grep -q .; then
+        AUTO_UPDATE_CONTAINERS+=("cli_debrid")
+      fi
+      
+      if docker ps -a -q -f name="plex" | grep -q .; then
+        MEDIA_SERVER="plex"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("plex")
+      elif docker ps -a -q -f name="jellyfin" | grep -q .; then
+        MEDIA_SERVER="jellyfin"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("jellyfin")
+      elif docker ps -a -q -f name="emby" | grep -q .; then
+        MEDIA_SERVER="emby"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("emby")
+      else
+        MEDIA_SERVER="none"
+      fi
+      
+      if docker ps -a -q -f name="overseerr" | grep -q .; then
+        REQUEST_MANAGER="overseerr"
+        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("overseerr")
+      elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
+        REQUEST_MANAGER="jellyseerr"
+        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("jellyseerr")
+      else
+        REQUEST_MANAGER="none"
+      fi
+      
+      if docker ps -a -q -f name="jackett" | grep -q .; then
+        INSTALL_JACKETT=true
+        AUTO_UPDATE_CONTAINERS+=("jackett")
+      else
+        INSTALL_JACKETT=false
+      fi
+      
+      if docker ps -a -q -f name="flaresolverr" | grep -q .; then
+        INSTALL_FLARESOLVERR=true
+        AUTO_UPDATE_CONTAINERS+=("flaresolverr")
+      else
+        INSTALL_FLARESOLVERR=false
+      fi
+      
+      AUTO_UPDATE_CONTAINERS+=("watchtower")
+      
+      # Now ask the user to select which containers to update
+      select_auto_update_containers
+    fi
+    
+    # Ask if user wants to setup Discord notifications for Watchtower
+    echo "Do you want to set up Discord notifications for Watchtower updates?"
+    read -p "y/N: " SETUP_DISCORD
+    SETUP_DISCORD=${SETUP_DISCORD:-n}
+    
+    if [[ "${SETUP_DISCORD,,}" == "y" || "${SETUP_DISCORD,,}" == "yes" ]]; then
+      setup_discord_notifications
+    fi
+    
     docker pull containrrr/watchtower:latest
   else
     # Ask if user wants to add Watchtower
@@ -1565,6 +1825,65 @@ update_existing_setup() {
           WATCHTOWER_SCHEDULE="0 3 * * *"
           ;;
       esac
+      
+      # Determine which containers are in the setup
+      if docker ps -a -q -f name="zurg" | grep -q .; then
+        AUTO_UPDATE_CONTAINERS+=("zurg")
+      fi
+      
+      if docker ps -a -q -f name="cli_debrid" | grep -q .; then
+        AUTO_UPDATE_CONTAINERS+=("cli_debrid")
+      fi
+      
+      if docker ps -a -q -f name="plex" | grep -q .; then
+        MEDIA_SERVER="plex"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("plex")
+      elif docker ps -a -q -f name="jellyfin" | grep -q .; then
+        MEDIA_SERVER="jellyfin"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("jellyfin")
+      elif docker ps -a -q -f name="emby" | grep -q .; then
+        MEDIA_SERVER="emby"
+        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("emby")
+      else
+        MEDIA_SERVER="none"
+      fi
+      
+      if docker ps -a -q -f name="overseerr" | grep -q .; then
+        REQUEST_MANAGER="overseerr"
+        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("overseerr")
+      elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
+        REQUEST_MANAGER="jellyseerr"
+        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
+        AUTO_UPDATE_CONTAINERS+=("jellyseerr")
+      else
+        REQUEST_MANAGER="none"
+      fi
+      
+      if docker ps -a -q -f name="jackett" | grep -q .; then
+        INSTALL_JACKETT=true
+        AUTO_UPDATE_CONTAINERS+=("jackett")
+      else
+        INSTALL_JACKETT=false
+      fi
+      
+      if docker ps -a -q -f name="flaresolverr" | grep -q .; then
+        INSTALL_FLARESOLVERR=true
+        AUTO_UPDATE_CONTAINERS+=("flaresolverr")
+      else
+        INSTALL_FLARESOLVERR=false
+      fi
+      
+      AUTO_UPDATE_CONTAINERS+=("watchtower")
+      
+      # Now ask the user to select which containers to update
+      select_auto_update_containers
+      
+      # Ask if user wants to setup Discord notifications for Watchtower
+      setup_discord_notifications
       
       success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
       docker pull containrrr/watchtower:latest
@@ -1807,6 +2126,14 @@ display_completion_info() {
     echo -e "${BOLD}Automatic Updates:${NC}"
     echo -e "Watchtower is configured to automatically update containers using schedule:"
     echo -e "  ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (cron format)"
+    echo -e "Auto-updated containers:"
+    for container in "${AUTO_UPDATE_CONTAINERS[@]}"; do
+      echo -e "  - ${CYAN}${container}${NC}"
+    done
+    
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      echo -e "Discord notifications are enabled for updates"
+    fi
   fi
   
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
@@ -2031,6 +2358,19 @@ services:
       start_period: 30s
 EOF
 
+  # Add label for auto-updates if Watchtower will be used
+  if [[ "$INSTALL_WATCHTOWER" == "true" && "${AUTO_UPDATE_CONTAINERS[@]}" =~ "DMB" ]]; then
+    cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+EOF
+  elif [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+    cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+  fi
+
   success "Created Docker Compose file at ${CYAN}${DMB_COMPOSE_FILE}${NC}"
   
   # Check if Portainer is running
@@ -2088,6 +2428,20 @@ EOF
         restart: true
     restart: unless-stopped
 EOF
+
+    # Add label for auto-updates if Watchtower will be used
+    if [[ "$INSTALL_WATCHTOWER" == "true" && "${AUTO_UPDATE_CONTAINERS[@]}" =~ "plex" ]]; then
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+EOF
+    elif [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
+
     success "Added Plex container to Docker Compose"
   fi
   
@@ -2097,6 +2451,8 @@ EOF
   ADD_WATCHTOWER=${ADD_WATCHTOWER:-y}
   
   if [[ "${ADD_WATCHTOWER,,}" == "y" || "${ADD_WATCHTOWER,,}" == "yes" ]]; then
+    INSTALL_WATCHTOWER=true
+    
     echo "How often do you want to check for updates?"
     echo "1) Daily (recommended)"
     echo "2) Weekly"
@@ -2123,6 +2479,55 @@ EOF
         ;;
     esac
     
+    # Setup which containers to auto-update
+    AUTO_UPDATE_CONTAINERS=("DMB")
+    if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
+      AUTO_UPDATE_CONTAINERS+=("plex")
+    fi
+    AUTO_UPDATE_CONTAINERS+=("watchtower")
+    
+    # Let user select which containers to auto-update
+    header "Select Containers for Auto-Updates"
+    echo "Choose which containers you want Watchtower to automatically update:"
+    
+    # Clear containers array and ask again for each container to confirm
+    AUTO_UPDATE_CONTAINERS=()
+    
+    # Ask about updating DMB
+    read -p "Auto-update DMB? (Y/n): " UPDATE_CHOICE
+    UPDATE_CHOICE=${UPDATE_CHOICE:-y}
+    if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
+      AUTO_UPDATE_CONTAINERS+=("DMB")
+      success "Added ${CYAN}DMB${NC} to auto-update list"
+    else
+      log "Excluded DMB from auto-updates"
+    fi
+    
+    # Ask about updating Plex if it's being deployed
+    if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
+      read -p "Auto-update Plex? (Y/n): " UPDATE_CHOICE
+      UPDATE_CHOICE=${UPDATE_CHOICE:-y}
+      if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
+        AUTO_UPDATE_CONTAINERS+=("plex")
+        success "Added ${CYAN}plex${NC} to auto-update list"
+      else
+        log "Excluded plex from auto-updates"
+      fi
+    fi
+    
+    # Always ask about Watchtower itself
+    read -p "Auto-update Watchtower itself? (Y/n): " UPDATE_CHOICE
+    UPDATE_CHOICE=${UPDATE_CHOICE:-y}
+    if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
+      AUTO_UPDATE_CONTAINERS+=("watchtower")
+      success "Added ${CYAN}watchtower${NC} to auto-update list"
+    else
+      log "Excluded watchtower from auto-updates"
+    fi
+    
+          # Setup Discord notifications
+    setup_discord_notifications
+    
     cat >> "$DMB_COMPOSE_FILE" <<EOF
 
   watchtower:
@@ -2137,7 +2542,38 @@ EOF
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
       - WATCHTOWER_INCLUDE_STOPPED=true
+      - WATCHTOWER_LABEL_ENABLE=true
 EOF
+
+    # Add Discord notifications if configured
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      # Extract the webhook ID and token from the URL correctly
+      if [[ "$DISCORD_WEBHOOK_URL" =~ discord.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+) ]]; then
+        WEBHOOK_ID="${BASH_REMATCH[1]}"
+        WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
+        
+        cat >> "$DMB_COMPOSE_FILE" <<EOF
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=discord://${WEBHOOK_TOKEN}@${WEBHOOK_ID}
+EOF
+      else
+        warning "Invalid Discord webhook URL format. Notifications will not be enabled."
+      fi
+    fi
+
+    # Add label for auto-updates if Watchtower should update itself
+    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "watchtower" ]]; then
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+EOF
+    else
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
+
     success "Added Watchtower for automatic updates with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
   fi
   
@@ -2191,6 +2627,21 @@ EOF
     echo -e "${YELLOW}IMPORTANT PLEX SETUP INFORMATION:${NC}"
     echo -e "- When adding libraries to Plex, use the ${CYAN}/mnt${NC} folder (not /data)"
     echo -e "- The /data mount point should NOT be added to your Plex libraries"
+  fi
+  
+  if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    echo -e "${BOLD}Automatic Updates:${NC}"
+    echo -e "Watchtower is configured to automatically update containers using schedule:"
+    echo -e "  ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (cron format)"
+    echo -e "Auto-updated containers:"
+    for container in "${AUTO_UPDATE_CONTAINERS[@]}"; do
+      echo -e "  - ${CYAN}${container}${NC}"
+    done
+    
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      echo -e "Discord notifications are enabled for updates"
+    fi
   fi
   
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
