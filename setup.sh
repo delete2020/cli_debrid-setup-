@@ -1065,6 +1065,8 @@ select_cli_image() {
 
 # Function to select which containers to auto-update
 select_auto_update_containers() {
+  # Debug output
+  echo "DEBUG: Auto-update function called"
   header "Select Containers for Auto-Updates"
   
   echo "Choose which containers you want Watchtower to automatically update:"
@@ -1091,6 +1093,9 @@ select_auto_update_containers() {
   # Add Watchtower itself
   all_containers+=("watchtower")
   
+  # IMPORTANT: Clear any existing selections
+  AUTO_UPDATE_CONTAINERS=()
+  
   # Ask for each container
   for container in "${all_containers[@]}"; do
     read -p "Auto-update ${container}? (Y/n): " UPDATE_CHOICE
@@ -1103,6 +1108,8 @@ select_auto_update_containers() {
       log "Excluded ${container} from auto-updates"
     fi
   done
+  
+  echo "Final auto-update list: ${AUTO_UPDATE_CONTAINERS[*]}"
   
   if [ ${#AUTO_UPDATE_CONTAINERS[@]} -eq 0 ]; then
     warning "No containers selected for auto-updates. Watchtower will be installed but won't update any containers."
@@ -1349,6 +1356,19 @@ generate_docker_compose() {
   
   # Ensure we have a valid IP address
   detect_server_ip
+
+  # Ensure we have a valid timezone
+  if [[ -z "$TIMEZONE" ]]; then
+    detect_timezone
+  fi
+
+  # Force timezone to a default if still empty
+  if [[ -z "$TIMEZONE" ]]; then
+    TIMEZONE="Etc/UTC"
+    warning "No timezone detected. Using UTC as default."
+  fi
+
+  echo "Using timezone: ${TIMEZONE} for Docker Compose"
   
   cat > "$DOCKER_COMPOSE_FILE" <<EOF
 version: "3.8"
@@ -1364,11 +1384,11 @@ services:
       - /home/config.yml:/app/config.yml
       - /home/plex_update.sh:/app/plex_update.sh
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
 EOF
 
   # Add auto-update label if selected
-  if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "zurg" ]]; then
+  if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" zurg "* ]]; then
     cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1396,13 +1416,13 @@ EOF
       - /user:/user
       - /mnt:/mnt
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
     depends_on:
       - zurg
 EOF
 
   # Add auto-update label if selected
-  if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "cli_debrid" ]]; then
+  if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" cli_debrid "* ]]; then
     cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1438,7 +1458,7 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
     volumes:
       - /mnt:/mnt
 EOF
@@ -1462,7 +1482,7 @@ EOF
 EOF
 
     # Add auto-update label if selected
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "$MEDIA_SERVER" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" $MEDIA_SERVER "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1489,13 +1509,13 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
     depends_on:
       - ${MEDIA_SERVER}
 EOF
 
     # Add auto-update label if selected
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "$REQUEST_MANAGER" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" $REQUEST_MANAGER "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1522,12 +1542,12 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - AUTO_UPDATE=true
 EOF
 
     # Add auto-update label if selected
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "jackett" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" jackett "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1551,12 +1571,12 @@ EOF
       - "8191:8191"
     environment:
       - LOG_LEVEL=info
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - CAPTCHA_SOLVER=none
 EOF
 
     # Add auto-update label if selected
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "flaresolverr" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" flaresolverr "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1579,7 +1599,7 @@ EOF
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
@@ -1605,7 +1625,7 @@ EOF
     fi
 
     # Add auto-update label if selected
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "watchtower" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" watchtower "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -1664,10 +1684,14 @@ deploy_containers() {
 
 # Updated update_existing_setup function to handle Portainer correctly
 update_existing_setup() {
+  # Clear any existing auto-update container selections
+  AUTO_UPDATE_CONTAINERS=()
   header "Update Existing Setup"
   
   # Ensure we have a valid IP address
   detect_server_ip
+  # Ensure we have a valid timezone - same as fresh install
+  detect_timezone
   
   # Detect Portainer early
   local USING_PORTAINER=false
@@ -1714,6 +1738,8 @@ update_existing_setup() {
   fi
   
   # Check for existing Watchtower
+  # Initialize AUTO_UPDATE_CONTAINERS array - same as fresh install
+  AUTO_UPDATE_CONTAINERS=()
   if docker ps -a -q -f name="watchtower" | grep -q .; then
     INSTALL_WATCHTOWER=true
     log "Watchtower exists. Will update it."
@@ -1947,6 +1973,8 @@ update_existing_setup() {
   fi
   
   # Generate Docker Compose file
+  # Debug output
+  echo "DEBUG: Generating Docker Compose with containers: ${AUTO_UPDATE_CONTAINERS[*]}"
   generate_docker_compose
   
   # Start containers based on setup
@@ -2332,7 +2360,7 @@ services:
       - ${BASE_DIR}/DMB/Zilean/data:/zilean/app/data
       - ${BASE_DIR}/DMB/plex_debrid:/plex_debrid/config
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - PUID=${CURRENT_UID}
       - PGID=${CURRENT_GID}
       - DMB_LOG_LEVEL=INFO
@@ -2410,7 +2438,7 @@ EOF
       - ${BASE_DIR}/DMB/Zurg/mnt:/data
       - ${BASE_DIR}/DMB/Riven/mnt:/mnt
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - PLEX_UID=${CURRENT_UID}
       - PLEX_GID=${CURRENT_GID}
       - PLEX_CLAIM=${PLEX_CLAIM}
@@ -2537,7 +2565,7 @@ EOF
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - TZ=${TIMEZONE}
+      - TZ="${TIMEZONE:-Etc/UTC}"
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
@@ -2562,7 +2590,7 @@ EOF
     fi
 
     # Add label for auto-updates if Watchtower should update itself
-    if [[ "${AUTO_UPDATE_CONTAINERS[@]}" =~ "watchtower" ]]; then
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" watchtower "* ]]; then
       cat >> "$DMB_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
