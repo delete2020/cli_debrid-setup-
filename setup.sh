@@ -1,19 +1,5 @@
 #!/bin/bash
 
-# Enhanced Debrid Media Stack Setup Script with Watchtower
-# 
-# Features:
-# - Cross-distribution compatibility
-# - Backup & restore functionality
-# - VPS detection and optimization
-# - Improved error handling and validation
-# - Advanced rclone deployment checks
-# - Automatic updates via Watchtower
-# - Proper Portainer integration
-# - Selective container updates
-# - Discord webhook notifications
-
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -23,12 +9,10 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# Global variables
 SERVER_IP=""
 DISCORD_WEBHOOK_URL=""
 AUTO_UPDATE_CONTAINERS=()
 
-# Logging functions
 log() {
   echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"
 }
@@ -49,16 +33,13 @@ header() {
   echo -e "\n${BOLD}${MAGENTA}$*${NC}\n"
 }
 
-# Function to detect and set the server IP
 detect_server_ip() {
-  # Check if IP is already set
   if [[ -n "$SERVER_IP" ]]; then
     return 0
   fi
   
   log "Detecting server IP address..."
   
-  # Try multiple methods to detect IP
   if command -v ip &>/dev/null; then
     SERVER_IP=$(ip route get 1 | awk '{print $(NF-2);exit}' 2>/dev/null)
   fi
@@ -72,7 +53,6 @@ detect_server_ip() {
   fi
   
   if [[ -z "$SERVER_IP" ]]; then
-    # If no IP detected, use localhost
     warning "Could not detect server IP. Using localhost."
     SERVER_IP="127.0.0.1"
   elif [[ ! "$SERVER_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
@@ -85,23 +65,26 @@ detect_server_ip() {
   return 0
 }
 
-# Check if script is run as root
+detect_timezone() {
+  SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
+  log "Detected system timezone: ${CYAN}${SYSTEM_TIMEZONE}${NC}"
+  TIMEZONE=$SYSTEM_TIMEZONE
+  return 0
+}
+
 if [[ $(id -u) -ne 0 ]]; then 
   error "This script must be run as root. Try: sudo $0"
   exit 1
 fi
 
-# Script banner
 echo -e "${BOLD}${CYAN}"
 echo "┌─────────────────────────────────────────────────────────┐"
 echo "│       Enhanced Debrid Media Stack Setup Script          │"
 echo "└─────────────────────────────────────────────────────────┘"
 echo -e "${NC}"
 
-# Detect system information
 header "System Detection"
 
-# OS detection
 if [ -f /etc/os-release ]; then
   . /etc/os-release
   OS_NAME=$NAME
@@ -122,7 +105,6 @@ fi
 
 log "Detected operating system: ${CYAN}$OS_PRETTY_NAME${NC}"
 
-# Architecture detection
 ARCHITECTURE=$(uname -m)
 if [[ "$ARCHITECTURE" == "aarch64" || "$ARCHITECTURE" == "arm64" ]]; then
   ARCHITECTURE_TYPE="arm64"
@@ -132,9 +114,7 @@ fi
 
 log "System architecture: ${CYAN}$ARCHITECTURE${NC} (${CYAN}$ARCHITECTURE_TYPE${NC})"
 
-# VPS detection
 IS_VPS=false
-# Check common VPS indicators
 if [ -d /proc/vz ] || [ -d /proc/bc ] || [ -f /proc/user_beancounters ] || [ -d /proc/xen ]; then
   IS_VPS=true
 elif [ -f /sys/hypervisor/type ]; then
@@ -149,20 +129,16 @@ fi
 if [ "$IS_VPS" = true ]; then
   log "Detected environment: ${CYAN}Virtual Private Server (VPS)${NC}"
   
-  # Get available memory
   TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
   log "Available memory: ${CYAN}${TOTAL_MEM}MB${NC}"
   
-  # Get available CPU cores
   CPU_CORES=$(nproc)
   log "Available CPU cores: ${CYAN}${CPU_CORES}${NC}"
   
-  # VPS-specific optimizations will be applied
 else
   log "Detected environment: ${CYAN}Physical or Dedicated Server${NC}"
 fi
 
-# Function to check if Portainer is running
 is_portainer_running() {
   if docker ps -q -f name=portainer | grep -q .; then
     return 0  # true
@@ -171,7 +147,6 @@ is_portainer_running() {
   fi
 }
 
-# Function to check and install package manager commands
 setup_package_manager() {
   case $OS_ID in
     debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|deepin)
@@ -205,7 +180,6 @@ setup_package_manager() {
       success "Using APK package manager"
       ;;
     *)
-      # Default to apt for unknown distributions
       warning "Unknown distribution. Attempting to use APT."
       PKG_MANAGER="apt"
       PKG_UPDATE="apt update"
@@ -214,20 +188,17 @@ setup_package_manager() {
   esac
 }
 
-# Function to install prerequisites based on the detected OS
 install_prerequisites() {
   header "Installing Prerequisites"
   
   log "Updating package lists..."
   eval "$PKG_UPDATE" || warning "Failed to update package lists. Continuing anyway."
   
-  # Common packages needed across distributions
   COMMON_PACKAGES="curl wget git"
   
   log "Installing common prerequisites..."
   eval "$PKG_INSTALL $COMMON_PACKAGES" || warning "Failed to install some common packages."
   
-  # Check for existing FUSE setup
   FUSE3_INSTALLED=false
   FUSE_INSTALLED=false
   
@@ -241,13 +212,11 @@ install_prerequisites() {
     log "Legacy FUSE is installed"
   fi
   
-  # Distribution-specific packages
   case $OS_ID in
     debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|deepin)
       log "Installing Debian/Ubuntu specific packages..."
       eval "$PKG_INSTALL apt-transport-https ca-certificates gnupg lsb-release" || warning "Failed to install some Debian/Ubuntu specific packages."
       
-      # Only try to install FUSE3 if it's not already installed
       if [ "$FUSE3_INSTALLED" = false ]; then
         log "Attempting to install FUSE3..."
         if eval "$PKG_INSTALL fuse3"; then
@@ -262,7 +231,6 @@ install_prerequisites() {
       log "Installing RHEL/Fedora specific packages..."
       eval "$PKG_INSTALL dnf-plugins-core" || warning "Failed to install some RHEL/Fedora specific packages."
       
-      # Only try to install FUSE3 if it's not already installed
       if [ "$FUSE3_INSTALLED" = false ]; then
         eval "$PKG_INSTALL fuse3" || warning "Failed to install FUSE3. Will use existing FUSE if available."
       fi
@@ -287,7 +255,6 @@ install_prerequisites() {
       ;;
   esac
   
-  # Ensure FUSE modules are loaded
   if ! lsmod | grep -q fuse; then
     log "Loading FUSE kernel module..."
     modprobe fuse 2>/dev/null || warning "Could not load FUSE kernel module. May need reboot or kernel support."
@@ -304,7 +271,6 @@ install_prerequisites() {
   success "Base prerequisites installed"
 }
 
-# Function to install Docker
 install_docker() {
   if command -v docker &>/dev/null; then
     success "Docker is already installed"
@@ -315,42 +281,31 @@ install_docker() {
   
   case $OS_ID in
     debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|deepin)
-      # Add Docker's official GPG key
       curl -fsSL https://download.docker.com/linux/$OS_ID/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
       
-      # Set up the stable repository
       echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/$OS_ID $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
       
-      # Update package lists
       apt update
       
-      # Install Docker
       apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
       ;;
     fedora)
-      # Add Docker repository
       dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
       
-      # Install Docker
       dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
       ;;
     centos|rhel|rocky|almalinux|ol|scientific|amazon)
-      # Add Docker repository
       dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
       
-      # Install Docker
       dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
       ;;
     arch|manjaro|endeavouros)
-      # Install Docker
       pacman -S --noconfirm docker docker-compose
       ;;
     opensuse*|suse|sles)
-      # Install Docker
       zypper install -y docker docker-compose
       ;;
     alpine)
-      # Install Docker
       apk add docker docker-compose
       ;;
     *)
@@ -359,7 +314,6 @@ install_docker() {
       ;;
   esac
   
-  # Enable and start Docker service
   systemctl enable docker
   systemctl start docker
   
@@ -372,7 +326,6 @@ install_docker() {
   fi
 }
 
-# Function to install rclone with fallback mechanisms
 install_rclone() {
   if command -v rclone &>/dev/null; then
     local RCLONE_VERSION=$(rclone --version | head -n 1 | awk '{print $2}')
@@ -382,7 +335,6 @@ install_rclone() {
   
   log "Installing rclone..."
   
-  # Try the official install script first
   if curl -s https://rclone.org/install.sh | bash; then
     if command -v rclone &>/dev/null; then
       local RCLONE_VERSION=$(rclone --version | head -n 1 | awk '{print $2}')
@@ -391,7 +343,6 @@ install_rclone() {
     fi
   fi
   
-  # Fallback to package manager
   warning "rclone install script failed. Trying package manager installation..."
   eval "$PKG_INSTALL rclone"
   
@@ -401,7 +352,6 @@ install_rclone() {
     return 0
   fi
   
-  # Last resort: manual binary download
   warning "Package manager installation failed. Trying manual installation..."
   
   local RCLONE_URL="https://downloads.rclone.org/rclone-current-linux-${ARCHITECTURE_TYPE}.zip"
@@ -428,7 +378,6 @@ install_rclone() {
   fi
 }
 
-# Function to create directories and basic structure
 setup_directories() {
   log "Creating directory structure..."
   
@@ -438,13 +387,11 @@ setup_directories() {
   mkdir -p /root/.config/rclone
   touch /user/logs/debug.log
   
-  # Create backup directory
   mkdir -p /backup/config
   
   success "Created directory structure"
 }
 
-# Backup functionality
 backup_system() {
   header "Creating System Backup"
   
@@ -455,7 +402,6 @@ backup_system() {
   
   log "Backing up configuration files..."
   
-  # Backup config files
   if [ -f /home/config.yml ]; then
     cp /home/config.yml "$BACKUP_DIR/config.yml"
   fi
@@ -476,12 +422,15 @@ backup_system() {
     cp /etc/systemd/system/zurg-rclone.service "$BACKUP_DIR/zurg-rclone.service"
   fi
   
-  # Backup docker compose file if it exists
   if [ -f /tmp/docker-compose.yml ]; then
     cp /tmp/docker-compose.yml "$BACKUP_DIR/docker-compose.yml"
   fi
   
-  # Create backup manifest
+  BASE_DIR="/home/$(id -un)/docker"
+  if [ -f "${BASE_DIR}/docker-compose.yml" ]; then
+    cp "${BASE_DIR}/docker-compose.yml" "$BACKUP_DIR/dmb-docker-compose.yml"
+  fi
+  
   cat > "$BACKUP_DIR/backup_info.txt" <<EOF
 Debrid Media Stack Backup
 Date: $(date)
@@ -493,27 +442,21 @@ Backed up files:
 $(find "$BACKUP_DIR" -type f | grep -v backup_info.txt)
 EOF
 
-  # Create archive
   tar -czf "/backup/debrid_backup_${BACKUP_DATE}.tar.gz" -C "/backup" "backup_${BACKUP_DATE}"
   
-  # Remove temporary directory
   rm -rf "$BACKUP_DIR"
   
   success "Backup created: ${CYAN}/backup/debrid_backup_${BACKUP_DATE}.tar.gz${NC}"
   
-  # List available backups
   echo "Available backups:"
   ls -lh /backup/debrid_backup_*.tar.gz 2>/dev/null || echo "No previous backups found."
 }
 
-# Restore functionality - updated to handle Portainer properly
 restore_system() {
   header "System Restore"
   
-  # Ensure we have a valid IP address
   detect_server_ip
   
-  # Detect Portainer early
   local USING_PORTAINER=false
   if is_portainer_running; then
     log "Detected active Portainer instance"
@@ -549,7 +492,6 @@ restore_system() {
   
   log "Restoring from backup: ${CYAN}$SELECTED_BACKUP${NC}"
   
-  # Extract backup
   mkdir -p "$RESTORE_DIR"
   tar -xzf "$SELECTED_BACKUP" -C "$RESTORE_DIR"
   
@@ -561,99 +503,127 @@ restore_system() {
     return 1
   fi
   
-  # Stop services and containers
+  local IS_DMB_BACKUP=false
+  if [ -f "$EXTRACTED_DIR/dmb-docker-compose.yml" ]; then
+    IS_DMB_BACKUP=true
+    log "Detected DMB backup type"
+  else
+    log "Detected CLI-based backup type"
+  fi
+  
   log "Stopping services..."
   systemctl stop zurg-rclone.service 2>/dev/null
   
-  # Stop all relevant containers
   if command -v docker &>/dev/null; then
     log "Stopping Docker containers..."
-    docker stop zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+    if [ "$IS_DMB_BACKUP" = true ]; then
+      docker stop DMB plex watchtower 2>/dev/null
+    else
+      docker stop zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+    fi
   fi
   
-  # Restore files
-  log "Restoring configuration files..."
-  
-  if [ -f "$EXTRACTED_DIR/config.yml" ]; then
-    cp "$EXTRACTED_DIR/config.yml" /home/config.yml
+  if [ "$IS_DMB_BACKUP" = true ]; then
+    BASE_DIR="/home/$(id -un)/docker"
+    mkdir -p ${BASE_DIR}
+    
+    if [ -f "$EXTRACTED_DIR/dmb-docker-compose.yml" ]; then
+      cp "$EXTRACTED_DIR/dmb-docker-compose.yml" "${BASE_DIR}/docker-compose.yml"
+      success "Restored DMB docker-compose.yml"
+    fi
+  else
+    log "Restoring configuration files..."
+    
+    if [ -f "$EXTRACTED_DIR/config.yml" ]; then
+      cp "$EXTRACTED_DIR/config.yml" /home/config.yml
+    fi
+    
+    if [ -f "$EXTRACTED_DIR/plex_update.sh" ]; then
+      cp "$EXTRACTED_DIR/plex_update.sh" /home/plex_update.sh
+      chmod +x /home/plex_update.sh
+    fi
+    
+    if [ -f "$EXTRACTED_DIR/settings.json" ]; then
+      mkdir -p /user/config
+      cp "$EXTRACTED_DIR/settings.json" /user/config/settings.json
+    fi
+    
+    if [ -f "$EXTRACTED_DIR/rclone.conf" ]; then
+      mkdir -p /root/.config/rclone
+      cp "$EXTRACTED_DIR/rclone.conf" /root/.config/rclone/rclone.conf
+    fi
+    
+    if [ -f "$EXTRACTED_DIR/zurg-rclone.service" ]; then
+      cp "$EXTRACTED_DIR/zurg-rclone.service" /etc/systemd/system/zurg-rclone.service
+      systemctl daemon-reload
+    fi
+    
+    if [ -f "$EXTRACTED_DIR/docker-compose.yml" ]; then
+      cp "$EXTRACTED_DIR/docker-compose.yml" /tmp/docker-compose.yml
+    fi
   fi
   
-  if [ -f "$EXTRACTED_DIR/plex_update.sh" ]; then
-    cp "$EXTRACTED_DIR/plex_update.sh" /home/plex_update.sh
-    chmod +x /home/plex_update.sh
-  fi
-  
-  if [ -f "$EXTRACTED_DIR/settings.json" ]; then
-    mkdir -p /user/config
-    cp "$EXTRACTED_DIR/settings.json" /user/config/settings.json
-  fi
-  
-  if [ -f "$EXTRACTED_DIR/rclone.conf" ]; then
-    mkdir -p /root/.config/rclone
-    cp "$EXTRACTED_DIR/rclone.conf" /root/.config/rclone/rclone.conf
-  fi
-  
-  if [ -f "$EXTRACTED_DIR/zurg-rclone.service" ]; then
-    cp "$EXTRACTED_DIR/zurg-rclone.service" /etc/systemd/system/zurg-rclone.service
-    systemctl daemon-reload
-  fi
-  
-  if [ -f "$EXTRACTED_DIR/docker-compose.yml" ]; then
-    cp "$EXTRACTED_DIR/docker-compose.yml" /tmp/docker-compose.yml
-  fi
-  
-  # Clean up
   rm -rf "$RESTORE_DIR"
   
-  # Restart services based on setup
   if [ "$USING_PORTAINER" = true ]; then
     echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
     echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
-    if [ -f "/tmp/docker-compose.yml" ]; then
-      echo "1. Update your stack with the restored Docker Compose configuration"
-      echo "2. Redeploy the stack through Portainer interface"
+    
+    if [ "$IS_DMB_BACKUP" = true ]; then
+      echo "1. Update your DMB stack with the restored Docker Compose configuration"
+      echo "2. Redeploy the DMB stack through Portainer interface"
       echo -e "${CYAN}Here is the restored Docker Compose configuration:${NC}"
-      cat /tmp/docker-compose.yml
-    else 
-      echo "1. Verify your stack configuration"
-      echo "2. Redeploy the stack through Portainer interface"
+      cat "${BASE_DIR}/docker-compose.yml"
+    else
+      if [ -f "/tmp/docker-compose.yml" ]; then
+        echo "1. Update your stack with the restored Docker Compose configuration"
+        echo "2. Redeploy the stack through Portainer interface"
+        echo -e "${CYAN}Here is the restored Docker Compose configuration:${NC}"
+        cat /tmp/docker-compose.yml
+      else 
+        echo "1. Verify your stack configuration"
+        echo "2. Redeploy the stack through Portainer interface"
+      fi
     fi
     read -p "Press Enter once you've updated and redeployed the stack in Portainer..."
   else
-    # Start services for non-Portainer users
-    if [ -f "/tmp/docker-compose.yml" ]; then
-      log "Deploying restored Docker Compose stack..."
-      cd /tmp && docker compose -f docker-compose.yml up -d
+    if [ "$IS_DMB_BACKUP" = true ]; then
+      log "Deploying restored DMB Docker Compose stack..."
+      cd "${BASE_DIR}" && docker compose up -d
     else
-      log "Starting containers individually..."
-      docker start zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+      if [ -f "/tmp/docker-compose.yml" ]; then
+        log "Deploying restored Docker Compose stack..."
+        cd /tmp && docker compose -f docker-compose.yml up -d
+      else
+        log "Starting containers individually..."
+        docker start zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+      fi
+      
+      log "Starting rclone service..."
+      systemctl start zurg-rclone.service
     fi
   fi
-  
-  # Start rclone service
-  log "Starting rclone service..."
-  systemctl start zurg-rclone.service
   
   success "Restore completed successfully"
   return 0
 }
 
-# Function to get Real-Debrid API key
 get_rd_api_key() {
-  # Check for existing API key in config files
   local EXISTING_KEY=""
   
-  # Try to extract from Zurg config.yml
   if [ -f "/home/config.yml" ]; then
     EXISTING_KEY=$(grep -oP 'token: \K.*' /home/config.yml 2>/dev/null)
   fi
   
-  # If not found, try cli_debrid settings.json
   if [ -z "$EXISTING_KEY" ] && [ -f "/user/config/settings.json" ]; then
     EXISTING_KEY=$(grep -oP '"api_key": "\K[^"]*' /user/config/settings.json 2>/dev/null)
   fi
   
-  # If an existing key was found, ask if user wants to use it
+  BASE_DIR="/home/$(id -un)/docker"
+  if [ -z "$EXISTING_KEY" ] && [ -f "${BASE_DIR}/docker-compose.yml" ]; then
+    EXISTING_KEY=$(grep -oP 'ZURG_INSTANCES_REALDEBRID_API_KEY=\K[^"]*' "${BASE_DIR}/docker-compose.yml" 2>/dev/null)
+  fi
+  
   if [ -n "$EXISTING_KEY" ]; then
     echo -e "${CYAN}Existing Real-Debrid API key found.${NC}"
     read -p "Use existing key? (Y/n): " USE_EXISTING
@@ -666,7 +636,6 @@ get_rd_api_key() {
     fi
   fi
   
-  # No existing key or user wants to enter a new one
   echo -e "${YELLOW}Enter Real-Debrid API key${NC} (will remain on your system): "
   read -s RD_API_KEY
   echo
@@ -680,14 +649,11 @@ get_rd_api_key() {
   return 0
 }
 
-# Setup configuration files
 setup_configs() {
   header "Setting Up Configuration Files"
   
-  # Get server IP address
   detect_server_ip
   
-  # Ask if user wants to use a different IP
   echo -e "Current server IP: ${CYAN}${SERVER_IP}${NC}"
   read -p "Enter different server IP (leave blank to use current): " CUSTOM_IP
   if [[ -n "$CUSTOM_IP" ]]; then
@@ -699,14 +665,12 @@ setup_configs() {
     fi
   fi
   
-  # Get timezone
   SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
   echo -e "Current system timezone: ${CYAN}${SYSTEM_TIMEZONE}${NC}"
   read -p "Enter timezone (leave blank for system timezone): " CUSTOM_TIMEZONE
   TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
   log "Using timezone: ${CYAN}${TIMEZONE}${NC}"
   
-  # Configure update script
   cat > "/home/plex_update.sh" <<EOF
 #!/bin/bash
 
@@ -723,13 +687,10 @@ echo "Updates completed!"
 EOF
   chmod +x /home/plex_update.sh
   
-  # Configure Zurg
-  # VPS-specific optimizations if needed
   local CONCURRENT_WORKERS=64
   local CHECK_INTERVAL=10
   
   if [ "$IS_VPS" = true ] && [ $TOTAL_MEM -lt 2048 ]; then
-    # Lower resource settings for VPS with less than 2GB RAM
     CONCURRENT_WORKERS=16
     CHECK_INTERVAL=30
     log "Applied VPS optimization for low memory environment"
@@ -765,7 +726,6 @@ directories:
       - regex: /.*/
 EOF
   
-  # Configure cli_debrid
   cat > "/user/config/settings.json" <<EOF
 {
     "general": {
@@ -788,7 +748,6 @@ EOF
 }
 EOF
   
-  # Configure rclone
   cat > "/root/.config/rclone/rclone.conf" <<EOF
 [zurg-wd]
 type = webdav
@@ -798,7 +757,6 @@ pacer_min_sleep = 10ms
 pacer_burst = 0
 EOF
   
-  # Create systemd service for rclone with appropriate FUSE version
   cat > "/etc/systemd/system/zurg-rclone.service" <<EOF
 [Unit]
 Description=Rclone mount for zurg
@@ -831,7 +789,6 @@ ExecStart=/usr/bin/rclone mount \\
   --exclude="**sample**" \\
 EOF
 
-  # Add FUSE3-specific options if available
   if [ "$FUSE3_INSTALLED" = true ]; then
     cat >> "/etc/systemd/system/zurg-rclone.service" <<EOF
   --async-read=true \\
@@ -840,7 +797,6 @@ EOF
 EOF
   fi
 
-  # Complete the service file
   cat >> "/etc/systemd/system/zurg-rclone.service" <<EOF
   zurg-wd: /mnt/zurg
 ExecStop=/bin/bash -c 'fusermount3 -uz /mnt/zurg 2>/dev/null || fusermount -uz /mnt/zurg 2>/dev/null || umount -l /mnt/zurg'
@@ -853,11 +809,9 @@ StartLimitBurst=3
 WantedBy=multi-user.target
 EOF
   
-  # Apply VPS-specific optimizations to rclone if needed
   if [ "$IS_VPS" = true ] && [ $TOTAL_MEM -lt 2048 ]; then
     log "Applying VPS-optimized rclone settings..."
     
-    # Replace the existing ExecStart with optimized settings
     sed -i 's/--vfs-cache-max-size=2G/--vfs-cache-max-size=512M/g' /etc/systemd/system/zurg-rclone.service
     sed -i 's/--buffer-size 64M/--buffer-size 32M/g' /etc/systemd/system/zurg-rclone.service
     sed -i 's/--transfers 16/--transfers 8/g' /etc/systemd/system/zurg-rclone.service
@@ -867,12 +821,11 @@ EOF
   success "Configuration files created"
 }
 
-# Container management functions
 check_existing_containers() {
   if command -v docker &>/dev/null; then
     log "Checking for existing containers..."
     
-    local containers=("zurg" "cli_debrid" "plex" "jellyfin" "emby" "overseerr" "jellyseerr" "jackett" "flaresolverr" "watchtower")
+    local containers=("zurg" "cli_debrid" "plex" "jellyfin" "emby" "overseerr" "jellyseerr" "jackett" "flaresolverr" "watchtower" "DMB")
     for container in "${containers[@]}"; do
       if docker ps -a -q -f name="$container" | grep -q .; then
         echo -e "Container '${CYAN}$container${NC}' already exists."
@@ -889,11 +842,11 @@ check_existing_containers() {
   fi
 }
 
-# Function to pull Docker images with better error handling
 pull_docker_image() {
   local image="$1"
   local max_retries=5
   local retry_delay=5
+  local wait_for_completion=true
   
   if docker inspect "$image" &>/dev/null; then
     log "Image '${CYAN}$image${NC}' exists. Skipping pull."
@@ -905,7 +858,11 @@ pull_docker_image() {
   for ((i=1; i<=max_retries; i++)); do
     if docker pull "$image"; then
       success "Successfully pulled image: ${CYAN}$image${NC}"
-      return 0
+      if docker inspect "$image" &>/dev/null; then
+        return 0
+      else
+        warning "Image pull reported success but verification failed. Retrying..."
+      fi
     else
       warning "Pull attempt $i/$max_retries failed. Retrying in $retry_delay seconds..."
       sleep "$retry_delay"
@@ -938,29 +895,24 @@ pull_docker_image() {
   esac
 }
 
-# Function to validate rclone setup
 validate_rclone_setup() {
   log "Validating rclone configuration..."
   
-  # Check if rclone config exists
   if [ ! -f "/root/.config/rclone/rclone.conf" ]; then
     error "rclone configuration file is missing"
     return 1
   fi
   
-  # Check if rclone service exists
   if [ ! -f "/etc/systemd/system/zurg-rclone.service" ]; then
     error "rclone service file is missing"
     return 1
   fi
   
-  # Check if rclone service is enabled
   if ! systemctl is-enabled zurg-rclone.service &>/dev/null; then
     warning "rclone service is not enabled. Enabling now..."
     systemctl enable zurg-rclone.service
   fi
   
-  # Test rclone configuration
   log "Testing rclone configuration..."
   if rclone lsd zurg-wd: --verbose 2>&1 | grep -q "Failed to create"; then
     warning "rclone test failed - this is expected if Zurg is not running yet"
@@ -971,49 +923,40 @@ validate_rclone_setup() {
   return 0
 }
 
-# Enhanced test and diagnostic function for Zurg connectivity
 test_zurg_connection() {
   log "Testing Zurg connectivity..."
   
-  # Check if Zurg container is running
   if ! docker ps | grep -q zurg; then
     warning "Zurg container is not running. Start Docker containers first."
     return 1
   fi
   
-  # Check if Zurg API is responding
   if ! curl -s http://localhost:9999/ping >/dev/null; then
     warning "Zurg API is not responding. Checking container logs..."
     docker logs zurg --tail 20
     return 1
   fi
   
-  # Test rclone connection to Zurg
   log "Testing rclone connection to Zurg..."
   
-  # Try to list directories
   if rclone lsd zurg-wd: --verbose 2>&1; then
     success "Zurg connectivity test passed successfully"
     return 0
   else
     warning "rclone connection test failed. Restarting services..."
     
-    # Restart Zurg container
     docker restart zurg
     sleep 5
     
-    # Restart rclone service
     systemctl restart zurg-rclone.service
     sleep 5
     
-    # Try again
     if rclone lsd zurg-wd: --verbose 2>&1; then
       success "Zurg connectivity successful after restart"
       return 0
     else
       error "Zurg connectivity test failed even after restart"
       
-      # Diagnostic information
       echo -e "${YELLOW}Diagnostic Information:${NC}"
       echo "1. Docker container status:"
       docker ps -a | grep zurg
@@ -1035,7 +978,6 @@ test_zurg_connection() {
   fi
 }
 
-# Media component selection functions
 select_cli_image() {
   header "CLI Debrid Image Selection"
   echo -e "It is recommended to use the '${BOLD}dev${NC}' image for cli_debrid for the latest features."
@@ -1063,40 +1005,42 @@ select_cli_image() {
   fi
 }
 
-# Function to select which containers to auto-update
 select_auto_update_containers() {
-  # Debug output
-  echo "DEBUG: Auto-update function called"
   header "Select Containers for Auto-Updates"
   
   echo "Choose which containers you want Watchtower to automatically update:"
   
-  # Define all possible containers
-  local all_containers=("zurg" "cli_debrid")
+  local all_containers=()
   
-  if [[ "$MEDIA_SERVER" != "none" ]]; then
-    all_containers+=("$MEDIA_SERVER")
+  if [[ "$INSTALL_TYPE" == "dmb" ]]; then
+    all_containers+=("DMB")
+    if [[ "$DEPLOY_PLEX" == "true" ]]; then
+      all_containers+=("plex")
+    fi
+  else
+    all_containers+=("zurg" "cli_debrid")
+    
+    if [[ "$MEDIA_SERVER" != "none" ]]; then
+      all_containers+=("$MEDIA_SERVER")
+    fi
+    
+    if [[ "$REQUEST_MANAGER" != "none" ]]; then
+      all_containers+=("$REQUEST_MANAGER")
+    fi
+    
+    if [[ "$INSTALL_JACKETT" == "true" ]]; then
+      all_containers+=("jackett")
+    fi
+    
+    if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+      all_containers+=("flaresolverr")
+    fi
   fi
   
-  if [[ "$REQUEST_MANAGER" != "none" ]]; then
-    all_containers+=("$REQUEST_MANAGER")
-  fi
-  
-  if [[ "$INSTALL_JACKETT" == "true" ]]; then
-    all_containers+=("jackett")
-  fi
-  
-  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
-    all_containers+=("flaresolverr")
-  fi
-  
-  # Add Watchtower itself
   all_containers+=("watchtower")
   
-  # IMPORTANT: Clear any existing selections
   AUTO_UPDATE_CONTAINERS=()
   
-  # Ask for each container
   for container in "${all_containers[@]}"; do
     read -p "Auto-update ${container}? (Y/n): " UPDATE_CHOICE
     UPDATE_CHOICE=${UPDATE_CHOICE:-y}
@@ -1118,7 +1062,6 @@ select_auto_update_containers() {
   fi
 }
 
-# Function to set up Discord webhook for Watchtower notifications
 setup_discord_notifications() {
   header "Discord Webhook Notifications for Watchtower"
   
@@ -1148,10 +1091,8 @@ setup_discord_notifications() {
 }
 
 select_media_components() {
-  # Select CLI image
   select_cli_image
   
-  # Media server selection
   header "Media Server Selection"
   echo "Choose a media server to install:"
   echo "1) Plex"
@@ -1186,7 +1127,6 @@ select_media_components() {
       ;;
   esac
   
-  # Request manager selection
   header "Request Manager Selection"
   echo "Choose a request manager to install:"
   echo "1) Overseerr (works best with Plex)"
@@ -1214,7 +1154,6 @@ select_media_components() {
       ;;
   esac
   
-  # Torrent indexer setup
   header "Torrent Indexer Setup"
   echo "Do you want to install Jackett for torrent indexer integration?"
   read -p "Y/n: " JACKETT_CHOICE
@@ -1241,7 +1180,6 @@ select_media_components() {
     log "Skipping Jackett installation"
   fi
   
-  # Docker management
   header "Docker Management"
   echo "Do you want to install Portainer for Docker management?"
   read -p "Y/n: " PORTAINER_CHOICE
@@ -1255,7 +1193,6 @@ select_media_components() {
     log "Skipping Portainer installation"
   fi
   
-  # Auto-updates configuration
   header "Automatic Updates"
   echo "Do you want to enable automatic updates using Watchtower?"
   read -p "Y/n: " WATCHTOWER_CHOICE
@@ -1273,27 +1210,26 @@ select_media_components() {
     
     case "$UPDATE_SCHEDULE_CHOICE" in
       1)
-        # Daily at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * *"
         ;;
       2)
-        # Weekly on Sunday at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * 0"
         ;;
       3)
         echo "Enter custom cron schedule (e.g., '0 3 * * *' for daily at 3:00 AM):"
         read -p "> " WATCHTOWER_SCHEDULE
+        if [[ -z "$WATCHTOWER_SCHEDULE" ]]; then
+          WATCHTOWER_SCHEDULE="0 3 * * *"
+          log "Using default schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (daily at 3:00 AM)"
+        fi
         ;;
       *)
-        # Default to daily at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * *"
         ;;
     esac
     
-    # Add container selection for auto-updates
     select_auto_update_containers
     
-    # Setup Discord notifications
     setup_discord_notifications
     
     success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
@@ -1305,28 +1241,42 @@ select_media_components() {
 
 pull_required_images() {
   header "Pulling Docker Images"
-  log "Pulling required Docker images..."
-  pull_docker_image "ghcr.io/debridmediamanager/zurg-testing:latest"
-  pull_docker_image "$CLI_DEBRID_IMAGE"
   
-  if [[ "$MEDIA_SERVER" != "none" ]]; then
-    pull_docker_image "$MEDIA_SERVER_IMAGE"
-  fi
-  
-  if [[ "$REQUEST_MANAGER" != "none" ]]; then
-    pull_docker_image "$REQUEST_MANAGER_IMAGE"
-  fi
-  
-  if [[ "$INSTALL_JACKETT" == "true" ]]; then
-    pull_docker_image "linuxserver/jackett:latest"
-  fi
-  
-  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
-    pull_docker_image "ghcr.io/flaresolverr/flaresolverr:latest"
-  fi
-  
-  if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
-    pull_docker_image "containrrr/watchtower:latest"
+  if [[ "$INSTALL_TYPE" == "dmb" ]]; then
+    log "Pulling required DMB Docker images..."
+    pull_docker_image "iampuid0/dmb:latest"
+    
+    if [[ "$DEPLOY_PLEX" == "true" ]]; then
+      pull_docker_image "plexinc/pms-docker:latest"
+    fi
+    
+    if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+      pull_docker_image "containrrr/watchtower:latest"
+    fi
+  else
+    log "Pulling required CLI-based Docker images..."
+    pull_docker_image "ghcr.io/debridmediamanager/zurg-testing:latest"
+    pull_docker_image "$CLI_DEBRID_IMAGE"
+    
+    if [[ "$MEDIA_SERVER" != "none" ]]; then
+      pull_docker_image "$MEDIA_SERVER_IMAGE"
+    fi
+    
+    if [[ "$REQUEST_MANAGER" != "none" ]]; then
+      pull_docker_image "$REQUEST_MANAGER_IMAGE"
+    fi
+    
+    if [[ "$INSTALL_JACKETT" == "true" ]]; then
+      pull_docker_image "linuxserver/jackett:latest"
+    fi
+    
+    if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+      pull_docker_image "ghcr.io/flaresolverr/flaresolverr:latest"
+    fi
+    
+    if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+      pull_docker_image "containrrr/watchtower:latest"
+    fi
   fi
   
   if [[ "$INSTALL_PORTAINER" == "true" ]]; then
@@ -1354,15 +1304,12 @@ generate_docker_compose() {
   log "Generating Docker Compose file..."
   DOCKER_COMPOSE_FILE="/tmp/docker-compose.yml"
   
-  # Ensure we have a valid IP address
   detect_server_ip
 
-  # Ensure we have a valid timezone
   if [[ -z "$TIMEZONE" ]]; then
     detect_timezone
   fi
 
-  # Force timezone to a default if still empty
   if [[ -z "$TIMEZONE" ]]; then
     TIMEZONE="Etc/UTC"
     warning "No timezone detected. Using UTC as default."
@@ -1387,7 +1334,6 @@ services:
       - TZ="${TIMEZONE:-Etc/UTC}"
 EOF
 
-  # Add auto-update label if selected
   if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" zurg "* ]]; then
     cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1421,7 +1367,6 @@ EOF
       - zurg
 EOF
 
-  # Add auto-update label if selected
   if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" cli_debrid "* ]]; then
     cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1481,7 +1426,6 @@ EOF
         condition: service_started
 EOF
 
-    # Add auto-update label if selected
     if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" $MEDIA_SERVER "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1514,7 +1458,6 @@ EOF
       - ${MEDIA_SERVER}
 EOF
 
-    # Add auto-update label if selected
     if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" $REQUEST_MANAGER "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1546,7 +1489,6 @@ EOF
       - AUTO_UPDATE=true
 EOF
 
-    # Add auto-update label if selected
     if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" jackett "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1575,7 +1517,6 @@ EOF
       - CAPTCHA_SOLVER=none
 EOF
 
-    # Add auto-update label if selected
     if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" flaresolverr "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1600,7 +1541,7 @@ EOF
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ="${TIMEZONE:-Etc/UTC}"
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-"0 3 * * *"}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
       - WATCHTOWER_INCLUDE_STOPPED=true
@@ -1608,9 +1549,7 @@ EOF
       - WATCHTOWER_ROLLING_RESTART=true
 EOF
 
-    # Add Discord notifications if configured
     if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
-      # Extract the webhook ID and token from the URL correctly
       if [[ "$DISCORD_WEBHOOK_URL" =~ discord.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+) ]]; then
         WEBHOOK_ID="${BASH_REMATCH[1]}"
         WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
@@ -1624,7 +1563,6 @@ EOF
       fi
     fi
 
-    # Add auto-update label if selected
     if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" watchtower "* ]]; then
       cat >> "$DOCKER_COMPOSE_FILE" <<EOF
     labels:
@@ -1646,674 +1584,14 @@ EOF
   echo -e "${MAGENTA}-----------------------------------------------------------------------${NC}"
 }
 
-# Updated deploy_containers function to handle Portainer correctly
-deploy_containers() {
-  header "Deploying Containers"
+generate_dmb_docker_compose() {
+  header "Generating DMB Docker Compose Configuration"
   
-  # Ensure we have a valid IP address
   detect_server_ip
   
-  if is_portainer_running; then
-    echo -e "Portainer detected running at: ${CYAN}https://${SERVER_IP}:9443${NC}"
-    echo "Please go to Portainer and:"
-    echo "1. Create a new stack (or update existing)"
-    echo "2. Import the Docker Compose configuration shown above"
-    echo "3. Deploy the stack through Portainer interface"
-    read -p "Press Enter once you've deployed the stack in Portainer..."
-  else
-    echo "Do you want to deploy the Docker Compose stack now?"
-    read -p "Y/n: " DEPLOY_CHOICE
-    DEPLOY_CHOICE=${DEPLOY_CHOICE:-y}
-    
-    if [[ "${DEPLOY_CHOICE,,}" == "y" || "${DEPLOY_CHOICE,,}" == "yes" ]]; then
-      log "Deploying Docker Compose stack..."
-      cd /tmp && docker compose -f docker-compose.yml up -d
-      
-      if [ $? -eq 0 ]; then
-        success "Docker Compose stack deployed successfully"
-      else
-        error "Failed to deploy Docker Compose stack"
-        echo "To deploy manually, copy the Docker Compose config and run it with docker compose"
-      fi
-    else
-      echo "To deploy manually, copy the Docker Compose configuration and create a docker-compose.yml file"
-      read -p "Press Enter once you've deployed the containers manually..."
-    fi
-  fi
-}
-
-# Updated update_existing_setup function to handle Portainer correctly
-update_existing_setup() {
-  # Clear any existing auto-update container selections
-  AUTO_UPDATE_CONTAINERS=()
-  header "Update Existing Setup"
-  
-  # Ensure we have a valid IP address
-  detect_server_ip
-  # Ensure we have a valid timezone - same as fresh install
-  detect_timezone
-  
-  # Detect Portainer early
-  local USING_PORTAINER=false
-  if is_portainer_running; then
-    log "Detected active Portainer instance"
-    USING_PORTAINER=true
-  fi
-  
-  # Get Real-Debrid API key
-  if ! get_rd_api_key; then
-    return 1
-  fi
-  
-  # Backup current setup
-  backup_system
-  
-  # Check if Zurg container exists
-  if ! docker ps -a -q -f name="zurg" | grep -q .; then
-    error "Zurg container not found. This doesn't appear to be an existing setup."
-    return 1
-  fi
-  
-  # Stop services
-  log "Stopping services..."
-  systemctl stop zurg-rclone.service 2>/dev/null
-  
-  # Stop Docker containers
-  log "Stopping Docker containers..."
-  docker stop zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
-  
-  # Update Docker images
-  log "Updating Docker images..."
-  docker pull ghcr.io/debridmediamanager/zurg-testing:latest
-  
-  # Get the currently used CLI image
-  CLI_CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' cli_debrid 2>/dev/null)
-  if [ -n "$CLI_CURRENT_IMAGE" ]; then
-    docker pull "$CLI_CURRENT_IMAGE"
-    CLI_DEBRID_IMAGE="$CLI_CURRENT_IMAGE"  # Set this for use in docker-compose generation
-    success "Using existing CLI image: ${CYAN}$CLI_DEBRID_IMAGE${NC}"
-  else
-    warning "Could not determine current CLI image. User selection required."
-    select_cli_image
-  fi
-  
-  # Check for existing Watchtower
-  # Initialize AUTO_UPDATE_CONTAINERS array - same as fresh install
-  AUTO_UPDATE_CONTAINERS=()
-  if docker ps -a -q -f name="watchtower" | grep -q .; then
-    INSTALL_WATCHTOWER=true
-    log "Watchtower exists. Will update it."
-    
-    # Ask user if they want to configure container selection for auto-updates
-    echo "Do you want to select which containers Watchtower should automatically update?"
-    read -p "y/N: " SELECT_CONTAINERS
-    SELECT_CONTAINERS=${SELECT_CONTAINERS:-n}
-    
-    if [[ "${SELECT_CONTAINERS,,}" == "y" || "${SELECT_CONTAINERS,,}" == "yes" ]]; then
-      # Determine which containers are in the setup
-      if docker ps -a -q -f name="zurg" | grep -q .; then
-        AUTO_UPDATE_CONTAINERS+=("zurg")
-      fi
-      
-      if docker ps -a -q -f name="cli_debrid" | grep -q .; then
-        AUTO_UPDATE_CONTAINERS+=("cli_debrid")
-      fi
-      
-      if docker ps -a -q -f name="plex" | grep -q .; then
-        MEDIA_SERVER="plex"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("plex")
-      elif docker ps -a -q -f name="jellyfin" | grep -q .; then
-        MEDIA_SERVER="jellyfin"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("jellyfin")
-      elif docker ps -a -q -f name="emby" | grep -q .; then
-        MEDIA_SERVER="emby"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("emby")
-      else
-        MEDIA_SERVER="none"
-      fi
-      
-      if docker ps -a -q -f name="overseerr" | grep -q .; then
-        REQUEST_MANAGER="overseerr"
-        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("overseerr")
-      elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
-        REQUEST_MANAGER="jellyseerr"
-        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("jellyseerr")
-      else
-        REQUEST_MANAGER="none"
-      fi
-      
-      if docker ps -a -q -f name="jackett" | grep -q .; then
-        INSTALL_JACKETT=true
-        AUTO_UPDATE_CONTAINERS+=("jackett")
-      else
-        INSTALL_JACKETT=false
-      fi
-      
-      if docker ps -a -q -f name="flaresolverr" | grep -q .; then
-        INSTALL_FLARESOLVERR=true
-        AUTO_UPDATE_CONTAINERS+=("flaresolverr")
-      else
-        INSTALL_FLARESOLVERR=false
-      fi
-      
-      AUTO_UPDATE_CONTAINERS+=("watchtower")
-      
-      # Now ask the user to select which containers to update
-      select_auto_update_containers
-    fi
-    
-    # Ask if user wants to setup Discord notifications for Watchtower
-    echo "Do you want to set up Discord notifications for Watchtower updates?"
-    read -p "y/N: " SETUP_DISCORD
-    SETUP_DISCORD=${SETUP_DISCORD:-n}
-    
-    if [[ "${SETUP_DISCORD,,}" == "y" || "${SETUP_DISCORD,,}" == "yes" ]]; then
-      setup_discord_notifications
-    fi
-    
-    docker pull containrrr/watchtower:latest
-  else
-    # Ask if user wants to add Watchtower
-    echo "Do you want to add Watchtower for automatic updates?"
-    read -p "y/N: " ADD_WATCHTOWER
-    ADD_WATCHTOWER=${ADD_WATCHTOWER:-n}
-    
-    if [[ "${ADD_WATCHTOWER,,}" == "y" || "${ADD_WATCHTOWER,,}" == "yes" ]]; then
-      INSTALL_WATCHTOWER=true
-      
-      echo "How often do you want to check for updates?"
-      echo "1) Daily (recommended)"
-      echo "2) Weekly"
-      echo "3) Custom schedule (cron format)"
-      read -p "Select option [1]: " UPDATE_SCHEDULE_CHOICE
-      UPDATE_SCHEDULE_CHOICE=${UPDATE_SCHEDULE_CHOICE:-1}
-      
-      case "$UPDATE_SCHEDULE_CHOICE" in
-        1)
-          # Daily at 3:00 AM
-          WATCHTOWER_SCHEDULE="0 3 * * *"
-          ;;
-        2)
-          # Weekly on Sunday at 3:00 AM
-          WATCHTOWER_SCHEDULE="0 3 * * 0"
-          ;;
-        3)
-          echo "Enter custom cron schedule (e.g., '0 3 * * *' for daily at 3:00 AM):"
-          read -p "> " WATCHTOWER_SCHEDULE
-          ;;
-        *)
-          # Default to daily at 3:00 AM
-          WATCHTOWER_SCHEDULE="0 3 * * *"
-          ;;
-      esac
-      
-      # Determine which containers are in the setup
-      if docker ps -a -q -f name="zurg" | grep -q .; then
-        AUTO_UPDATE_CONTAINERS+=("zurg")
-      fi
-      
-      if docker ps -a -q -f name="cli_debrid" | grep -q .; then
-        AUTO_UPDATE_CONTAINERS+=("cli_debrid")
-      fi
-      
-      if docker ps -a -q -f name="plex" | grep -q .; then
-        MEDIA_SERVER="plex"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("plex")
-      elif docker ps -a -q -f name="jellyfin" | grep -q .; then
-        MEDIA_SERVER="jellyfin"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("jellyfin")
-      elif docker ps -a -q -f name="emby" | grep -q .; then
-        MEDIA_SERVER="emby"
-        MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("emby")
-      else
-        MEDIA_SERVER="none"
-      fi
-      
-      if docker ps -a -q -f name="overseerr" | grep -q .; then
-        REQUEST_MANAGER="overseerr"
-        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("overseerr")
-      elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
-        REQUEST_MANAGER="jellyseerr"
-        REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
-        AUTO_UPDATE_CONTAINERS+=("jellyseerr")
-      else
-        REQUEST_MANAGER="none"
-      fi
-      
-      if docker ps -a -q -f name="jackett" | grep -q .; then
-        INSTALL_JACKETT=true
-        AUTO_UPDATE_CONTAINERS+=("jackett")
-      else
-        INSTALL_JACKETT=false
-      fi
-      
-      if docker ps -a -q -f name="flaresolverr" | grep -q .; then
-        INSTALL_FLARESOLVERR=true
-        AUTO_UPDATE_CONTAINERS+=("flaresolverr")
-      else
-        INSTALL_FLARESOLVERR=false
-      fi
-      
-      AUTO_UPDATE_CONTAINERS+=("watchtower")
-      
-      # Now ask the user to select which containers to update
-      select_auto_update_containers
-      
-      # Ask if user wants to setup Discord notifications for Watchtower
-      setup_discord_notifications
-      
-      success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
-      docker pull containrrr/watchtower:latest
-    else
-      INSTALL_WATCHTOWER=false
-    fi
-  fi
-  
-  # Update other containers if they exist
-  for container in "plex" "jellyfin" "emby" "overseerr" "jellyseerr" "jackett" "flaresolverr"; do
-    if docker ps -a -q -f name="$container" | grep -q .; then
-      CONTAINER_IMAGE=$(docker inspect --format='{{.Config.Image}}' "$container" 2>/dev/null)
-      if [ -n "$CONTAINER_IMAGE" ]; then
-        log "Updating $container image..."
-        docker pull "$CONTAINER_IMAGE"
-      fi
-    fi
-  done
-  
-  # Regenerate Docker Compose file
-  log "Regenerating Docker Compose file..."
-  # Determine media server and request manager
-  if docker ps -a -q -f name="plex" | grep -q .; then
-    MEDIA_SERVER="plex"
-    MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
-    MEDIA_SERVER_PORT="32400"
-  elif docker ps -a -q -f name="jellyfin" | grep -q .; then
-    MEDIA_SERVER="jellyfin"
-    MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
-    MEDIA_SERVER_PORT="8096"
-  elif docker ps -a -q -f name="emby" | grep -q .; then
-    MEDIA_SERVER="emby"
-    MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
-    MEDIA_SERVER_PORT="8096"
-  else
-    MEDIA_SERVER="none"
-  fi
-  
-  if docker ps -a -q -f name="overseerr" | grep -q .; then
-    REQUEST_MANAGER="overseerr"
-    REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
-    REQUEST_MANAGER_PORT="5055"
-  elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
-    REQUEST_MANAGER="jellyseerr"
-    REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
-    REQUEST_MANAGER_PORT="5055"
-  else
-    REQUEST_MANAGER="none"
-  fi
-  
-  # Set indexer flags
-  INSTALL_JACKETT=false
-  INSTALL_FLARESOLVERR=false
-  
-  if docker ps -a -q -f name="jackett" | grep -q .; then
-    INSTALL_JACKETT=true
-  fi
-  
-  if docker ps -a -q -f name="flaresolverr" | grep -q .; then
-    INSTALL_FLARESOLVERR=true
-  fi
-  
-  # Generate Docker Compose file
-  # Debug output
-  echo "DEBUG: Generating Docker Compose with containers: ${AUTO_UPDATE_CONTAINERS[*]}"
-  generate_docker_compose
-  
-  # Start containers based on setup
-  if [ "$USING_PORTAINER" = true ]; then
-    # Guide user to update the stack in Portainer
-    echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
-    echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
-    echo "1. Update your existing stack with the new Docker Compose configuration"
-    echo "2. Redeploy the stack through the Portainer interface"
-    echo -e "${CYAN}Here is the updated Docker Compose configuration:${NC}"
-    cat /tmp/docker-compose.yml
-    read -p "Press Enter once you've updated and redeployed the stack in Portainer..."
-  else
-    # Start containers using Docker Compose
-    log "Starting Docker containers..."
-    if [ -f "/tmp/docker-compose.yml" ]; then
-      cd /tmp && docker compose -f docker-compose.yml up -d
-    else
-      warning "Docker Compose file not found. Starting containers individually..."
-      docker start zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
-    fi
-  fi
-  
-  # Start rclone service
-  log "Starting rclone service..."
-  systemctl start zurg-rclone.service
-  
-  # Test connection
-  test_zurg_connection
-  
-  success "Update completed successfully"
-}
-
-# Updated repair_installation function to better handle Portainer
-repair_installation() {
-  header "Repairing Installation"
-  
-  # Ensure we have a valid IP address
-  detect_server_ip
-  
-  # Detect Portainer early
-  local USING_PORTAINER=false
-  if is_portainer_running; then
-    log "Detected active Portainer instance"
-    USING_PORTAINER=true
-  fi
-  
-  # Get Real-Debrid API key
-  if ! get_rd_api_key; then
-    return 1
-  fi
-  
-  # Check Docker
-  if ! command -v docker &>/dev/null; then
-    warning "Docker is not installed. Trying to install..."
-    install_docker
-  else
-    success "Docker is installed"
-  fi
-  
-  # Check rclone
-  if ! command -v rclone &>/dev/null; then
-    warning "rclone is not installed. Trying to install..."
-    install_rclone
-  else
-    success "rclone is installed"
-  fi
-  
-  # Validate rclone setup
-  validate_rclone_setup
-  
-  # Check Docker containers - handled differently if using Portainer
-  log "Checking Docker containers..."
-  if [ "$USING_PORTAINER" = true ]; then
-    # For Portainer users
-    if ! docker ps -q | grep -q zurg || ! docker ps -q | grep -q cli_debrid; then
-      warning "Some containers are not running."
-      echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
-      echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
-      echo "1. Check your stack status"
-      echo "2. Redeploy the stack if necessary"
-      read -p "Press Enter when you've verified containers are running in Portainer..."
-    else
-      success "Core containers appear to be running"
-    fi
-  else
-    # For non-Portainer users
-    for container in "zurg" "cli_debrid"; do
-      if ! docker ps -q -f name="$container" | grep -q .; then
-        if docker ps -a -q -f name="$container" | grep -q .; then
-          warning "Container $container exists but is not running. Starting..."
-          docker start "$container"
-        else
-          error "Container $container does not exist"
-        fi
-      else
-        success "Container $container is running"
-      fi
-    done
-  fi
-  
-  # Check mount points
-  log "Checking mount points..."
-  if ! mountpoint -q /mnt/zurg; then
-    warning "Zurg mount point is not mounted. Restarting rclone service..."
-    systemctl restart zurg-rclone.service
-    sleep 5
-    
-    if ! mountpoint -q /mnt/zurg; then
-      error "Failed to mount Zurg. Check logs for details."
-      systemctl status zurg-rclone.service
-    fi
-  else
-    success "Zurg mount point is mounted correctly"
-  fi
-  
-  # Test Zurg connection
-  test_zurg_connection
-  
-  success "Repair process completed"
-}
-
-display_completion_info() {
-  # Ensure we have a valid IP address
-  detect_server_ip
-  
-  echo
-  echo -e "${BOLD}${GREEN}=========================================================================${NC}"
-  echo -e "${BOLD}${CYAN}                      Setup Complete!                                   ${NC}"
-  echo -e "${BOLD}${GREEN}=========================================================================${NC}"
-  echo
-  echo -e "${BOLD}Service Access Information:${NC}"
-  echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "Zurg:                  ${CYAN}http://${SERVER_IP}:9999/dav/${NC}"
-  echo -e "cli_debrid:            ${CYAN}http://${SERVER_IP}:5000${NC}"
-  
-  if [[ "$MEDIA_SERVER" == "plex" ]]; then
-    echo -e "Plex:                  ${CYAN}http://${SERVER_IP}:32400/web${NC}"
-  elif [[ "$MEDIA_SERVER" == "jellyfin" ]]; then
-    echo -e "Jellyfin:              ${CYAN}http://${SERVER_IP}:8096${NC}"
-  elif [[ "$MEDIA_SERVER" == "emby" ]]; then
-    echo -e "Emby:                  ${CYAN}http://${SERVER_IP}:8096${NC}"
-  fi
-  
-  if [[ "$REQUEST_MANAGER" != "none" ]]; then
-    echo -e "${REQUEST_MANAGER^}:           ${CYAN}http://${SERVER_IP}:5055${NC}"
-  fi
-  
-  if [[ "$INSTALL_JACKETT" == "true" ]]; then
-    echo -e "Jackett:               ${CYAN}http://${SERVER_IP}:9117${NC}"
-  fi
-  
-  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
-    echo -e "FlareSolverr:          ${CYAN}http://${SERVER_IP}:8191${NC}"
-  fi
-  
-  if [[ "$INSTALL_PORTAINER" == "true" ]]; then
-    echo -e "Portainer:             ${CYAN}https://${SERVER_IP}:9443${NC}"
-  fi
-  
-  echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "Media Directory:        ${CYAN}/mnt${NC}"
-  echo -e "Mounted Content:        ${CYAN}/mnt/zurg${NC}"
-  echo -e "Symlinked Directory:    ${CYAN}/mnt/symlinked${NC}"
-  echo -e "Configuration Paths:"
-  echo -e "  Zurg Config:          ${CYAN}/home/config.yml${NC}"
-  echo -e "  Webhook Script:       ${CYAN}/home/plex_update.sh${NC}"
-  echo -e "  cli_debrid Config:    ${CYAN}/user/config/settings.json${NC}" 
-  echo -e "  cli_debrid Logs:      ${CYAN}/user/logs/debug.log${NC}"
-  if [[ "$INSTALL_JACKETT" == "true" ]]; then
-    echo -e "  Jackett Config:       ${CYAN}/jackett/config${NC}"
-  fi
-  echo -e "  Backup Directory:     ${CYAN}/backup${NC}"
-  
-  if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
-    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-    echo -e "${BOLD}Automatic Updates:${NC}"
-    echo -e "Watchtower is configured to automatically update containers using schedule:"
-    echo -e "  ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (cron format)"
-    echo -e "Auto-updated containers:"
-    for container in "${AUTO_UPDATE_CONTAINERS[@]}"; do
-      echo -e "  - ${CYAN}${container}${NC}"
-    done
-    
-    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
-      echo -e "Discord notifications are enabled for updates"
-    fi
-  fi
-  
-  echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "${YELLOW}NOTE: It may take some time for media to appear. Please be patient.${NC}"
-  if [[ "$INSTALL_JACKETT" == "true" ]]; then
-    echo -e "${YELLOW}NOTE: Configure Jackett at http://${SERVER_IP}:9117${NC}"
-    echo -e "      - Get the API Key from the Jackett web interface"
-    echo -e "      - Configure your preferred indexers in Jackett"
-    echo -e "      - Use the API Key to connect your media applications to Jackett"
-    
-    if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
-      echo -e "      - In Jackett, go to Settings and set FlareSolverr API URL to: ${CYAN}http://${SERVER_IP}:8191${NC}"
-      echo -e "      - This allows Jackett to bypass Cloudflare protection on supported indexers"
-    fi
-  fi
-  echo -e "${MAGENTA}==========================================================================${NC}"
-  
-  echo -e "\n${YELLOW}Would you like to reboot your system now?${NC}"
-  read -p "y/N: " REBOOT_CHOICE
-  REBOOT_CHOICE=${REBOOT_CHOICE:-n}
-  
-  if [[ "${REBOOT_CHOICE,,}" == "y" || "${REBOOT_CHOICE,,}" == "yes" ]]; then
-    log "Rebooting system..."
-    reboot
-  else
-    log "Reboot skipped. You may need to reboot manually for all changes to take effect."
-  fi
-}
-
-# Install new setup with proper Portainer handling
-install_new_setup() {
-  header "New Installation"
-  
-  # Setup package manager
-  setup_package_manager
-  
-  # Install prerequisites
-  install_prerequisites
-  
-  # Create directory structure
-  setup_directories
-  
-  # Install Docker
-  if ! install_docker; then
-    error "Docker installation failed. Cannot continue."
-    return 1
-  fi
-  
-  # Install rclone
-  if ! install_rclone; then
-    error "rclone installation failed. Cannot continue."
-    return 1
-  fi
-  
-  # Check for existing containers
-  check_existing_containers
-  
-  # Get Real-Debrid API key
-  if ! get_rd_api_key; then
-    return 1
-  fi
-  
-  # Media server selection
-  select_media_components
-  
-  # Setup config files
-  setup_configs
-  
-  # Pull Docker images
-  pull_required_images
-  
-  # Generate Docker compose file
-  generate_docker_compose
-  
-  # Deploy containers with proper Portainer handling
-  deploy_containers
-  
-  # Enable and start rclone service
-  log "Enabling and starting rclone service..."
-  systemctl daemon-reload
-  systemctl enable zurg-rclone.service
-  systemctl start zurg-rclone.service
-  
-  # Wait for containers to start
-  echo "Waiting for Docker containers to initialize..."
-  sleep 10
-  
-  # Test connection
-  test_zurg_connection
-  
-  # Create a backup of the fresh installation
-  backup_system
-  
-  # Display completion message
-  display_completion_info
-}
-
-# Select installation type
-select_installation_type() {
-  header "Installation Type Selection"
-  echo "Choose the type of installation:"
-  echo "1) Individual Containers (Zurg, cli_debrid, etc. separately)"
-  echo "2) DMB All-in-One (Debrid Media Bridge - includes Riven, plex_debrid, Zurg, etc.)"
-  
-  read -p "Select option [1]: " INSTALL_TYPE_CHOICE
-  INSTALL_TYPE_CHOICE=${INSTALL_TYPE_CHOICE:-1}
-  
-  if [[ "$INSTALL_TYPE_CHOICE" == "2" ]]; then
-    INSTALL_TYPE="dmb"
-    success "Selected installation type: ${CYAN}DMB All-in-One${NC}"
-  else
-    INSTALL_TYPE="individual"
-    success "Selected installation type: ${CYAN}Individual Containers${NC}"
-  fi
-}
-
-# DMB Installation Function
-install_dmb() {
-  header "Installing Debrid Media Bridge (DMB)"
-  
-  # Ensure we have a valid IP address
-  detect_server_ip
-  
-  # Setup package manager
-  setup_package_manager
-  
-  # Install prerequisites
-  install_prerequisites
-  
-  # Install Docker
-  if ! install_docker; then
-    error "Docker installation failed. Cannot continue."
-    return 1
-  fi
-  
-  # Get user ID and group ID
   CURRENT_UID=$(id -u)
   CURRENT_GID=$(id -g)
   
-  # Get Real-Debrid API key
-  if ! get_rd_api_key; then
-    return 1
-  fi
-  
-  # Get timezone
-  SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
-  echo -e "Current system timezone: ${CYAN}${SYSTEM_TIMEZONE}${NC}"
-  read -p "Enter timezone (leave blank for system timezone): " CUSTOM_TIMEZONE
-  TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
-  log "Using timezone: ${CYAN}${TIMEZONE}${NC}"
-  
-  # Create DMB directories
   log "Creating DMB directory structure..."
   
   BASE_DIR="/home/$(id -un)/docker"
@@ -2330,11 +1608,6 @@ install_dmb() {
   
   success "Created DMB directory structure at ${CYAN}${BASE_DIR}/DMB${NC}"
   
-  # Pull the DMB image
-  log "Pulling DMB image..."
-  pull_docker_image "iampuid0/dmb:latest"
-  
-  # Create Docker Compose file for DMB
   log "Creating Docker Compose file for DMB..."
   DMB_COMPOSE_FILE="${BASE_DIR}/docker-compose.yml"
   
@@ -2378,16 +1651,9 @@ services:
       - apparmor:unconfined
       - no-new-privileges
     restart: unless-stopped
-    healthcheck:
-      test: python /healthcheck.py
-      interval: 1m
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 EOF
 
-  # Add label for auto-updates if Watchtower will be used
-  if [[ "$INSTALL_WATCHTOWER" == "true" && "${AUTO_UPDATE_CONTAINERS[@]}" =~ "DMB" ]]; then
+  if [[ "$INSTALL_WATCHTOWER" == "true" && " ${AUTO_UPDATE_CONTAINERS[*]} " == *" DMB "* ]]; then
     cat >> "$DMB_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -2399,32 +1665,10 @@ EOF
 EOF
   fi
 
-  success "Created Docker Compose file at ${CYAN}${DMB_COMPOSE_FILE}${NC}"
-  
-  # Check if Portainer is running
-  local USING_PORTAINER=false
-  if is_portainer_running; then
-    log "Detected active Portainer instance"
-    USING_PORTAINER=true
-  fi
-  
-  # Ask if user wants to deploy Plex as well
-  echo "Do you want to deploy a Plex container to work with DMB?"
-  read -p "Y/n: " DEPLOY_PLEX
-  DEPLOY_PLEX=${DEPLOY_PLEX:-y}
-  
-  if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
-    log "Setting up Plex container..."
-    
-    # Create Plex directories
+  if [[ "$DEPLOY_PLEX" == "true" ]]; then
     mkdir -p ${BASE_DIR}/plex/library
     mkdir -p ${BASE_DIR}/plex/transcode
     
-    # Ask for Plex claim token
-    echo -e "${YELLOW}Enter Plex claim token${NC} (from https://www.plex.tv/claim/): "
-    read PLEX_CLAIM
-    
-    # Add Plex to the docker-compose file
     cat >> "$DMB_COMPOSE_FILE" <<EOF
 
   plex:
@@ -2444,21 +1688,12 @@ EOF
       - PLEX_CLAIM=${PLEX_CLAIM}
     ports:
       - "32400:32400"
-    healthcheck:
-      test: curl --connect-timeout 15 --silent --show-error --fail http://localhost:32400/identity
-      interval: 1m00s
-      timeout: 15s
-      retries: 3
-      start_period: 1m00s
     depends_on:
-      DMB:
-        condition: service_healthy
-        restart: true
+      - DMB
     restart: unless-stopped
 EOF
 
-    # Add label for auto-updates if Watchtower will be used
-    if [[ "$INSTALL_WATCHTOWER" == "true" && "${AUTO_UPDATE_CONTAINERS[@]}" =~ "plex" ]]; then
+    if [[ "$INSTALL_WATCHTOWER" == "true" && " ${AUTO_UPDATE_CONTAINERS[*]} " == *" plex "* ]]; then
       cat >> "$DMB_COMPOSE_FILE" <<EOF
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -2469,11 +1704,781 @@ EOF
       - "com.centurylinklabs.watchtower.enable=false"
 EOF
     fi
+  fi
 
-    success "Added Plex container to Docker Compose"
+  if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+    cat >> "$DMB_COMPOSE_FILE" <<EOF
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ="${TIMEZONE:-Etc/UTC}"
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-"0 3 * * *"}
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_REMOVE_VOLUMES=false
+      - WATCHTOWER_INCLUDE_STOPPED=true
+      - WATCHTOWER_LABEL_ENABLE=true
+EOF
+
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      if [[ "$DISCORD_WEBHOOK_URL" =~ discord.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+) ]]; then
+        WEBHOOK_ID="${BASH_REMATCH[1]}"
+        WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
+        
+        cat >> "$DMB_COMPOSE_FILE" <<EOF
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=discord://${WEBHOOK_TOKEN}@${WEBHOOK_ID}
+EOF
+      else
+        warning "Invalid Discord webhook URL format. Notifications will not be enabled."
+      fi
+    fi
+
+    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" watchtower "* ]]; then
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+EOF
+    else
+      cat >> "$DMB_COMPOSE_FILE" <<EOF
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+EOF
+    fi
+  fi
+
+  success "Docker Compose file for DMB created at ${CYAN}${DMB_COMPOSE_FILE}${NC}"
+  
+  echo -e "\n${CYAN}${BOLD}DMB Docker Compose Configuration:${NC}"
+  echo -e "${MAGENTA}-----------------------------------------------------------------------${NC}"
+  cat "$DMB_COMPOSE_FILE"
+  echo -e "${MAGENTA}-----------------------------------------------------------------------${NC}"
+  
+  return 0
+}
+
+deploy_containers() {
+  header "Deploying Containers"
+  
+  detect_server_ip
+  
+  log "Verifying Docker images..."
+  
+  if [[ "$INSTALL_TYPE" == "dmb" ]]; then
+    if ! docker image inspect iampuid0/dmb:latest &>/dev/null; then
+      warning "DMB image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull DMB image again to ensure it's complete..."
+      docker pull iampuid0/dmb:latest
+      
+      if ! docker image inspect iampuid0/dmb:latest &>/dev/null; then
+        error "Failed to verify DMB image. Please check your internet connection."
+        echo "You may need to run 'docker pull iampuid0/dmb:latest' manually before proceeding."
+        read -p "Press Enter to continue anyway or Ctrl+C to abort..."
+      fi
+    fi
+    
+    if [[ "$DEPLOY_PLEX" == "true" ]] && ! docker image inspect plexinc/pms-docker:latest &>/dev/null; then
+      warning "Plex image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull Plex image again to ensure it's complete..."
+      docker pull plexinc/pms-docker:latest
+    fi
+  else
+    if ! docker image inspect ghcr.io/debridmediamanager/zurg-testing:latest &>/dev/null; then
+      warning "Zurg image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull Zurg image again to ensure it's complete..."
+      docker pull ghcr.io/debridmediamanager/zurg-testing:latest
+    fi
+    
+    if ! docker image inspect "$CLI_DEBRID_IMAGE" &>/dev/null; then
+      warning "CLI Debrid image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull CLI Debrid image again to ensure it's complete..."
+      docker pull "$CLI_DEBRID_IMAGE"
+    fi
   fi
   
-  # Ask if user wants Watchtower for automatic updates
+  if is_portainer_running; then
+    echo -e "Portainer detected running at: ${CYAN}https://${SERVER_IP}:9443${NC}"
+    echo "Please go to Portainer and:"
+    echo "1. Create a new stack (or update existing)"
+    echo "2. Import the Docker Compose configuration shown above"
+    echo "3. Deploy the stack through Portainer interface"
+    read -p "Press Enter once you've deployed the stack in Portainer..."
+  else
+    echo "Do you want to deploy the Docker Compose stack now?"
+    read -p "Y/n: " DEPLOY_CHOICE
+    DEPLOY_CHOICE=${DEPLOY_CHOICE:-y}
+    
+    if [[ "${DEPLOY_CHOICE,,}" == "y" || "${DEPLOY_CHOICE,,}" == "yes" ]]; then
+      if [[ "$INSTALL_TYPE" == "dmb" ]]; then
+        log "Deploying DMB Docker Compose stack..."
+        cd "${BASE_DIR}" && docker compose up -d
+      else
+        log "Deploying Docker Compose stack..."
+        cd /tmp && docker compose -f docker-compose.yml up -d
+      fi
+      
+      if [ $? -eq 0 ]; then
+        success "Docker Compose stack deployed successfully"
+      else
+        error "Failed to deploy Docker Compose stack"
+        echo "To deploy manually, copy the Docker Compose config and run it with docker compose"
+      fi
+    else
+      echo "To deploy manually, copy the Docker Compose configuration and create a docker-compose.yml file"
+      read -p "Press Enter once you've deployed the containers manually..."
+    fi
+  fi
+}
+
+update_existing_setup() {
+  AUTO_UPDATE_CONTAINERS=()
+  header "Update Existing Setup"
+  
+  detect_server_ip
+  detect_timezone
+  
+  local USING_PORTAINER=false
+  if is_portainer_running; then
+    log "Detected active Portainer instance"
+    USING_PORTAINER=true
+  fi
+  
+  local IS_DMB_SETUP=false
+  if docker ps -a -q -f name="DMB" | grep -q .; then
+    IS_DMB_SETUP=true
+    log "Detected DMB-based setup"
+  else
+    log "Detected CLI-based setup"
+  fi
+  
+  if ! get_rd_api_key; then
+    return 1
+  fi
+  
+  backup_system
+  
+  if [ "$IS_DMB_SETUP" = true ]; then
+    if ! docker ps -a -q -f name="DMB" | grep -q .; then
+      error "DMB container not found. This doesn't appear to be an existing DMB setup."
+      return 1
+    fi
+    
+    BASE_DIR="/home/$(id -un)/docker"
+    if [ ! -f "${BASE_DIR}/docker-compose.yml" ]; then
+      warning "DMB docker-compose.yml not found at expected location. Creating new one."
+    fi
+    
+    log "Stopping DMB containers..."
+    docker stop DMB plex watchtower 2>/dev/null
+    
+    log "Updating DMB Docker images..."
+    docker pull iampuid0/dmb:latest
+    
+    if ! docker image inspect iampuid0/dmb:latest &>/dev/null; then
+      warning "DMB image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull DMB image again to ensure it's complete..."
+      docker pull iampuid0/dmb:latest
+      
+      if ! docker image inspect iampuid0/dmb:latest &>/dev/null; then
+        error "Failed to verify DMB image. Please check your internet connection."
+        echo "You may need to run 'docker pull iampuid0/dmb:latest' manually before proceeding."
+        read -p "Press Enter to continue anyway or Ctrl+C to abort..."
+      fi
+    else
+      success "DMB image updated successfully"
+    fi
+    
+    if docker ps -a -q -f name="plex" | grep -q .; then
+      docker pull plexinc/pms-docker:latest
+      
+      if ! docker image inspect plexinc/pms-docker:latest &>/dev/null; then
+        warning "Plex image doesn't appear to be fully pulled yet"
+        echo "Attempting to pull Plex image again to ensure it's complete..."
+        docker pull plexinc/pms-docker:latest
+      else
+        success "Plex image updated successfully"
+      fi
+      
+      DEPLOY_PLEX=true
+    else
+      DEPLOY_PLEX=false
+    fi
+    
+    if docker ps -a -q -f name="watchtower" | grep -q .; then
+      INSTALL_WATCHTOWER=true
+      log "Watchtower exists. Will update it."
+      
+      echo "Do you want to select which containers Watchtower should automatically update?"
+      read -p "y/N: " SELECT_CONTAINERS
+      SELECT_CONTAINERS=${SELECT_CONTAINERS:-n}
+      
+      if [[ "${SELECT_CONTAINERS,,}" == "y" || "${SELECT_CONTAINERS,,}" == "yes" ]]; then
+        AUTO_UPDATE_CONTAINERS=("DMB")
+        
+        if [ "$DEPLOY_PLEX" = true ]; then
+          AUTO_UPDATE_CONTAINERS+=("plex")
+        fi
+        
+        AUTO_UPDATE_CONTAINERS+=("watchtower")
+        
+        select_auto_update_containers
+      fi
+      
+      echo "Do you want to set up Discord notifications for Watchtower updates?"
+      read -p "y/N: " SETUP_DISCORD
+      SETUP_DISCORD=${SETUP_DISCORD:-n}
+      
+      if [[ "${SETUP_DISCORD,,}" == "y" || "${SETUP_DISCORD,,}" == "yes" ]]; then
+        setup_discord_notifications
+      fi
+      
+      docker pull containrrr/watchtower:latest
+    else
+      echo "Do you want to add Watchtower for automatic updates?"
+      read -p "y/N: " ADD_WATCHTOWER
+      ADD_WATCHTOWER=${ADD_WATCHTOWER:-n}
+      
+      if [[ "${ADD_WATCHTOWER,,}" == "y" || "${ADD_WATCHTOWER,,}" == "yes" ]]; then
+        INSTALL_WATCHTOWER=true
+        
+        echo "How often do you want to check for updates?"
+        echo "1) Daily (recommended)"
+        echo "2) Weekly"
+        echo "3) Custom schedule (cron format)"
+        read -p "Select option [1]: " UPDATE_SCHEDULE_CHOICE
+        UPDATE_SCHEDULE_CHOICE=${UPDATE_SCHEDULE_CHOICE:-1}
+        
+        case "$UPDATE_SCHEDULE_CHOICE" in
+          1)
+            WATCHTOWER_SCHEDULE="0 3 * * *"
+            ;;
+          2)
+            WATCHTOWER_SCHEDULE="0 3 * * 0"
+            ;;
+          3)
+            echo "Enter custom cron schedule (e.g., '0 3 * * *' for daily at 3:00 AM):"
+            read -p "> " WATCHTOWER_SCHEDULE
+            ;;
+          *)
+            WATCHTOWER_SCHEDULE="0 3 * * *"
+            ;;
+        esac
+        
+        AUTO_UPDATE_CONTAINERS=("DMB")
+        
+        if [ "$DEPLOY_PLEX" = true ]; then
+          AUTO_UPDATE_CONTAINERS+=("plex")
+        fi
+        
+        AUTO_UPDATE_CONTAINERS+=("watchtower")
+        
+        select_auto_update_containers
+        
+        setup_discord_notifications
+        
+        success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
+        docker pull containrrr/watchtower:latest
+      else
+        INSTALL_WATCHTOWER=false
+      fi
+    fi
+    
+    generate_dmb_docker_compose
+    
+  else
+    if ! docker ps -a -q -f name="zurg" | grep -q .; then
+      error "Zurg container not found. This doesn't appear to be an existing CLI setup."
+      return 1
+    fi
+    
+    log "Stopping services..."
+    systemctl stop zurg-rclone.service 2>/dev/null
+    
+    log "Stopping Docker containers..."
+    docker stop zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+    
+    log "Updating Docker images..."
+    docker pull ghcr.io/debridmediamanager/zurg-testing:latest
+    
+    if ! docker image inspect ghcr.io/debridmediamanager/zurg-testing:latest &>/dev/null; then
+      warning "Zurg image doesn't appear to be fully pulled yet"
+      echo "Attempting to pull Zurg image again to ensure it's complete..."
+      docker pull ghcr.io/debridmediamanager/zurg-testing:latest
+      
+      if ! docker image inspect ghcr.io/debridmediamanager/zurg-testing:latest &>/dev/null; then
+        error "Failed to verify Zurg image. Please check your internet connection."
+        echo "You may need to run 'docker pull ghcr.io/debridmediamanager/zurg-testing:latest' manually before proceeding."
+        read -p "Press Enter to continue anyway or Ctrl+C to abort..."
+      else
+        success "Zurg image updated successfully"
+      fi
+    else
+      success "Zurg image updated successfully"
+    fi
+    
+    CLI_CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' cli_debrid 2>/dev/null)
+    if [ -n "$CLI_CURRENT_IMAGE" ]; then
+      docker pull "$CLI_CURRENT_IMAGE"
+      
+      if ! docker image inspect "$CLI_CURRENT_IMAGE" &>/dev/null; then
+        warning "CLI Debrid image doesn't appear to be fully pulled yet"
+        echo "Attempting to pull CLI Debrid image again to ensure it's complete..."
+        docker pull "$CLI_CURRENT_IMAGE"
+        
+        if ! docker image inspect "$CLI_CURRENT_IMAGE" &>/dev/null; then
+          error "Failed to verify CLI Debrid image. Please check your internet connection."
+          echo "You may need to run 'docker pull ${CLI_CURRENT_IMAGE}' manually before proceeding."
+          read -p "Press Enter to continue anyway or Ctrl+C to abort..."
+        else
+          success "CLI Debrid image updated successfully"
+        fi
+      else
+        success "CLI Debrid image updated successfully"
+      fi
+      
+      CLI_DEBRID_IMAGE="$CLI_CURRENT_IMAGE"  # Set this for use in docker-compose generation
+      success "Using existing CLI image: ${CYAN}$CLI_DEBRID_IMAGE${NC}"
+    else
+      warning "Could not determine current CLI image. User selection required."
+      select_cli_image
+    fi
+    
+    AUTO_UPDATE_CONTAINERS=()
+    if docker ps -a -q -f name="watchtower" | grep -q .; then
+      INSTALL_WATCHTOWER=true
+      log "Watchtower exists. Will update it."
+      
+      echo "Do you want to select which containers Watchtower should automatically update?"
+      read -p "y/N: " SELECT_CONTAINERS
+      SELECT_CONTAINERS=${SELECT_CONTAINERS:-n}
+      
+      if [[ "${SELECT_CONTAINERS,,}" == "y" || "${SELECT_CONTAINERS,,}" == "yes" ]]; then
+        if docker ps -a -q -f name="zurg" | grep -q .; then
+          AUTO_UPDATE_CONTAINERS+=("zurg")
+        fi
+        
+        if docker ps -a -q -f name="cli_debrid" | grep -q .; then
+          AUTO_UPDATE_CONTAINERS+=("cli_debrid")
+        fi
+        
+        if docker ps -a -q -f name="plex" | grep -q .; then
+          MEDIA_SERVER="plex"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("plex")
+        elif docker ps -a -q -f name="jellyfin" | grep -q .; then
+          MEDIA_SERVER="jellyfin"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("jellyfin")
+        elif docker ps -a -q -f name="emby" | grep -q .; then
+          MEDIA_SERVER="emby"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("emby")
+        else
+          MEDIA_SERVER="none"
+        fi
+        
+        if docker ps -a -q -f name="overseerr" | grep -q .; then
+          REQUEST_MANAGER="overseerr"
+          REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("overseerr")
+        elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
+          REQUEST_MANAGER="jellyseerr"
+          REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("jellyseerr")
+        else
+          REQUEST_MANAGER="none"
+        fi
+        
+        if docker ps -a -q -f name="jackett" | grep -q .; then
+          INSTALL_JACKETT=true
+          AUTO_UPDATE_CONTAINERS+=("jackett")
+        else
+          INSTALL_JACKETT=false
+        fi
+        
+        if docker ps -a -q -f name="flaresolverr" | grep -q .; then
+          INSTALL_FLARESOLVERR=true
+          AUTO_UPDATE_CONTAINERS+=("flaresolverr")
+        else
+          INSTALL_FLARESOLVERR=false
+        fi
+        
+        AUTO_UPDATE_CONTAINERS+=("watchtower")
+        
+        select_auto_update_containers
+      fi
+      
+      echo "Do you want to set up Discord notifications for Watchtower updates?"
+      read -p "y/N: " SETUP_DISCORD
+      SETUP_DISCORD=${SETUP_DISCORD:-n}
+      
+      if [[ "${SETUP_DISCORD,,}" == "y" || "${SETUP_DISCORD,,}" == "yes" ]]; then
+        setup_discord_notifications
+      fi
+      
+      docker pull containrrr/watchtower:latest
+    else
+      echo "Do you want to add Watchtower for automatic updates?"
+      read -p "y/N: " ADD_WATCHTOWER
+      ADD_WATCHTOWER=${ADD_WATCHTOWER:-n}
+      
+      if [[ "${ADD_WATCHTOWER,,}" == "y" || "${ADD_WATCHTOWER,,}" == "yes" ]]; then
+        INSTALL_WATCHTOWER=true
+        
+        echo "How often do you want to check for updates?"
+        echo "1) Daily (recommended)"
+        echo "2) Weekly"
+        echo "3) Custom schedule (cron format)"
+        read -p "Select option [1]: " UPDATE_SCHEDULE_CHOICE
+        UPDATE_SCHEDULE_CHOICE=${UPDATE_SCHEDULE_CHOICE:-1}
+        
+        case "$UPDATE_SCHEDULE_CHOICE" in
+          1)
+            WATCHTOWER_SCHEDULE="0 3 * * *"
+            ;;
+          2)
+            WATCHTOWER_SCHEDULE="0 3 * * 0"
+            ;;
+          3)
+            echo "Enter custom cron schedule (e.g., '0 3 * * *' for daily at 3:00 AM):"
+            read -p "> " WATCHTOWER_SCHEDULE
+            ;;
+          *)
+            WATCHTOWER_SCHEDULE="0 3 * * *"
+            ;;
+        esac
+        
+        if docker ps -a -q -f name="zurg" | grep -q .; then
+          AUTO_UPDATE_CONTAINERS+=("zurg")
+        fi
+        
+        if docker ps -a -q -f name="cli_debrid" | grep -q .; then
+          AUTO_UPDATE_CONTAINERS+=("cli_debrid")
+        fi
+        
+        if docker ps -a -q -f name="plex" | grep -q .; then
+          MEDIA_SERVER="plex"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("plex")
+        elif docker ps -a -q -f name="jellyfin" | grep -q .; then
+          MEDIA_SERVER="jellyfin"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("jellyfin")
+        elif docker ps -a -q -f name="emby" | grep -q .; then
+          MEDIA_SERVER="emby"
+          MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("emby")
+        else
+          MEDIA_SERVER="none"
+        fi
+        
+        if docker ps -a -q -f name="overseerr" | grep -q .; then
+          REQUEST_MANAGER="overseerr"
+          REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("overseerr")
+        elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
+          REQUEST_MANAGER="jellyseerr"
+          REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
+          AUTO_UPDATE_CONTAINERS+=("jellyseerr")
+        else
+          REQUEST_MANAGER="none"
+        fi
+        
+        if docker ps -a -q -f name="jackett" | grep -q .; then
+          INSTALL_JACKETT=true
+          AUTO_UPDATE_CONTAINERS+=("jackett")
+        else
+          INSTALL_JACKETT=false
+        fi
+        
+        if docker ps -a -q -f name="flaresolverr" | grep -q .; then
+          INSTALL_FLARESOLVERR=true
+          AUTO_UPDATE_CONTAINERS+=("flaresolverr")
+        else
+          INSTALL_FLARESOLVERR=false
+        fi
+        
+        AUTO_UPDATE_CONTAINERS+=("watchtower")
+        
+        select_auto_update_containers
+        
+        setup_discord_notifications
+        
+        success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
+        docker pull containrrr/watchtower:latest
+      else
+        INSTALL_WATCHTOWER=false
+      fi
+    fi
+    
+    for container in "plex" "jellyfin" "emby" "overseerr" "jellyseerr" "jackett" "flaresolverr"; do
+      if docker ps -a -q -f name="$container" | grep -q .; then
+        CONTAINER_IMAGE=$(docker inspect --format='{{.Config.Image}}' "$container" 2>/dev/null)
+        if [ -n "$CONTAINER_IMAGE" ]; then
+          log "Updating $container image..."
+          docker pull "$CONTAINER_IMAGE"
+        fi
+      fi
+    done
+    
+    log "Regenerating Docker Compose file..."
+    if docker ps -a -q -f name="plex" | grep -q .; then
+      MEDIA_SERVER="plex"
+      MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' plex 2>/dev/null)
+      MEDIA_SERVER_PORT="32400"
+    elif docker ps -a -q -f name="jellyfin" | grep -q .; then
+      MEDIA_SERVER="jellyfin"
+      MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyfin 2>/dev/null)
+      MEDIA_SERVER_PORT="8096"
+    elif docker ps -a -q -f name="emby" | grep -q .; then
+      MEDIA_SERVER="emby"
+      MEDIA_SERVER_IMAGE=$(docker inspect --format='{{.Config.Image}}' emby 2>/dev/null)
+      MEDIA_SERVER_PORT="8096"
+    else
+      MEDIA_SERVER="none"
+    fi
+    
+    if docker ps -a -q -f name="overseerr" | grep -q .; then
+      REQUEST_MANAGER="overseerr"
+      REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' overseerr 2>/dev/null)
+      REQUEST_MANAGER_PORT="5055"
+    elif docker ps -a -q -f name="jellyseerr" | grep -q .; then
+      REQUEST_MANAGER="jellyseerr"
+      REQUEST_MANAGER_IMAGE=$(docker inspect --format='{{.Config.Image}}' jellyseerr 2>/dev/null)
+      REQUEST_MANAGER_PORT="5055"
+    else
+      REQUEST_MANAGER="none"
+    fi
+    
+    INSTALL_JACKETT=false
+    INSTALL_FLARESOLVERR=false
+    
+    if docker ps -a -q -f name="jackett" | grep -q .; then
+      INSTALL_JACKETT=true
+    fi
+    
+    if docker ps -a -q -f name="flaresolverr" | grep -q .; then
+      INSTALL_FLARESOLVERR=true
+    fi
+    
+    generate_docker_compose
+  fi
+  
+  if [ "$USING_PORTAINER" = true ]; then
+    echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
+    echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
+    
+    if [ "$IS_DMB_SETUP" = true ]; then
+      echo "1. Update your DMB stack with the new Docker Compose configuration"
+      echo "2. Redeploy the stack through the Portainer interface"
+      echo -e "${CYAN}Here is the updated Docker Compose configuration:${NC}"
+      cat "${BASE_DIR}/docker-compose.yml"
+    else
+      echo "1. Update your existing stack with the new Docker Compose configuration"
+      echo "2. Redeploy the stack through the Portainer interface"
+      echo -e "${CYAN}Here is the updated Docker Compose configuration:${NC}"
+      cat /tmp/docker-compose.yml
+    fi
+    
+    read -p "Press Enter once you've updated and redeployed the stack in Portainer..."
+  else
+    log "Starting Docker containers..."
+    
+    if [ "$IS_DMB_SETUP" = true ]; then
+      if [ -f "${BASE_DIR}/docker-compose.yml" ]; then
+        cd "${BASE_DIR}" && docker compose up -d
+      else
+        warning "DMB Docker Compose file not found. Starting containers individually..."
+        docker start DMB plex watchtower 2>/dev/null
+      fi
+    else
+      if [ -f "/tmp/docker-compose.yml" ]; then
+        cd /tmp && docker compose -f docker-compose.yml up -d
+      else
+        warning "Docker Compose file not found. Starting containers individually..."
+        docker start zurg cli_debrid plex jellyfin emby overseerr jellyseerr jackett flaresolverr watchtower 2>/dev/null
+      fi
+      
+      log "Starting rclone service..."
+      systemctl start zurg-rclone.service
+      
+      test_zurg_connection
+    fi
+  fi
+  
+  success "Update completed successfully"
+}
+
+repair_installation() {
+  header "Repairing Installation"
+  
+  detect_server_ip
+  
+  local USING_PORTAINER=false
+  if is_portainer_running; then
+    log "Detected active Portainer instance"
+    USING_PORTAINER=true
+  fi
+  
+  local IS_DMB_SETUP=false
+  if docker ps -a -q -f name="DMB" | grep -q .; then
+    IS_DMB_SETUP=true
+    log "Detected DMB-based setup"
+  else
+    log "Detected CLI-based setup"
+  fi
+  
+  if ! get_rd_api_key; then
+    return 1
+  fi
+  
+  if ! command -v docker &>/dev/null; then
+    warning "Docker is not installed. Trying to install..."
+    install_docker
+  else
+    success "Docker is installed"
+  fi
+  
+  if [ "$IS_DMB_SETUP" = true ]; then
+    log "Checking DMB Docker containers..."
+    if [ "$USING_PORTAINER" = true ]; then
+      if ! docker ps -q | grep -q DMB; then
+        warning "DMB container is not running."
+        echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
+        echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
+        echo "1. Check your DMB stack status"
+        echo "2. Redeploy the stack if necessary"
+        read -p "Press Enter when you've verified containers are running in Portainer..."
+      else
+        success "DMB container appears to be running"
+      fi
+    else
+      if ! docker ps -q -f name="DMB" | grep -q .; then
+        if docker ps -a -q -f name="DMB" | grep -q .; then
+          warning "DMB container exists but is not running. Starting..."
+          docker start DMB
+        else
+          error "DMB container does not exist"
+        fi
+      else
+        success "DMB container is running"
+      fi
+      
+      if docker ps -a -q -f name="plex" | grep -q .; then
+        if ! docker ps -q -f name="plex" | grep -q .; then
+          warning "Plex container exists but is not running. Starting..."
+          docker start plex
+        else
+          success "Plex container is running"
+        fi
+      fi
+    fi
+    
+    success "DMB repair process completed"
+  else
+    if ! command -v rclone &>/dev/null; then
+      warning "rclone is not installed. Trying to install..."
+      install_rclone
+    else
+      success "rclone is installed"
+    fi
+    
+    validate_rclone_setup
+    
+    log "Checking Docker containers..."
+    if [ "$USING_PORTAINER" = true ]; then
+      if ! docker ps -q | grep -q zurg || ! docker ps -q | grep -q cli_debrid; then
+        warning "Some containers are not running."
+        echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
+        echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
+        echo "1. Check your stack status"
+        echo "2. Redeploy the stack if necessary"
+        read -p "Press Enter when you've verified containers are running in Portainer..."
+      else
+        success "Core containers appear to be running"
+      fi
+    else
+      for container in "zurg" "cli_debrid"; do
+        if ! docker ps -q -f name="$container" | grep -q .; then
+          if docker ps -a -q -f name="$container" | grep -q .; then
+            warning "Container $container exists but is not running. Starting..."
+            docker start "$container"
+          else
+            error "Container $container does not exist"
+          fi
+        else
+          success "Container $container is running"
+        fi
+      done
+    fi
+    
+    log "Checking mount points..."
+    if ! mountpoint -q /mnt/zurg; then
+      warning "Zurg mount point is not mounted. Restarting rclone service..."
+      systemctl restart zurg-rclone.service
+      sleep 5
+      
+      if ! mountpoint -q /mnt/zurg; then
+        error "Failed to mount Zurg. Check logs for details."
+        systemctl status zurg-rclone.service
+      fi
+    else
+      success "Zurg mount point is mounted correctly"
+    fi
+    
+    test_zurg_connection
+    
+    success "CLI-based repair process completed"
+  fi
+}
+
+install_dmb() {
+  header "Installing RIVEN/DMB"
+  
+  detect_server_ip
+  
+  setup_package_manager
+  
+  install_prerequisites
+  
+  if ! install_docker; then
+    error "Docker installation failed. Cannot continue."
+    return 1
+  fi
+  
+  CURRENT_UID=$(id -u)
+  CURRENT_GID=$(id -g)
+  
+  if ! get_rd_api_key; then
+    return 1
+  fi
+  
+  SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
+  echo -e "Current system timezone: ${CYAN}${SYSTEM_TIMEZONE}${NC}"
+  read -p "Enter timezone (leave blank for system timezone): " CUSTOM_TIMEZONE
+  TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
+  log "Using timezone: ${CYAN}${TIMEZONE}${NC}"
+  
+  echo "Do you want to deploy a Plex container to work with RIVEN/DMB?"
+  read -p "Y/n: " DEPLOY_PLEX_CHOICE
+  DEPLOY_PLEX_CHOICE=${DEPLOY_PLEX_CHOICE:-y}
+  
+  if [[ "${DEPLOY_PLEX_CHOICE,,}" == "y" || "${DEPLOY_PLEX_CHOICE,,}" == "yes" ]]; then
+    DEPLOY_PLEX=true
+    
+    echo -e "${YELLOW}Enter Plex claim token${NC} (from https://www.plex.tv/claim/): "
+    read PLEX_CLAIM
+    
+    success "Plex will be installed with RIVEN/DMB"
+  else
+    DEPLOY_PLEX=false
+    log "Skipping Plex installation"
+  fi
+  
   echo "Do you want to add Watchtower for automatic container updates?"
   read -p "Y/n: " ADD_WATCHTOWER
   ADD_WATCHTOWER=${ADD_WATCHTOWER:-y}
@@ -2490,171 +2495,294 @@ EOF
     
     case "$UPDATE_SCHEDULE_CHOICE" in
       1)
-        # Daily at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * *"
         ;;
       2)
-        # Weekly on Sunday at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * 0"
         ;;
       3)
         echo "Enter custom cron schedule (e.g., '0 3 * * *' for daily at 3:00 AM):"
         read -p "> " WATCHTOWER_SCHEDULE
+        if [[ -z "$WATCHTOWER_SCHEDULE" ]]; then
+          WATCHTOWER_SCHEDULE="0 3 * * *"
+          log "Using default schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (daily at 3:00 AM)"
+        fi
         ;;
       *)
-        # Default to daily at 3:00 AM
         WATCHTOWER_SCHEDULE="0 3 * * *"
         ;;
     esac
     
-    # Setup which containers to auto-update
     AUTO_UPDATE_CONTAINERS=("DMB")
-    if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
+    if [ "$DEPLOY_PLEX" = true ]; then
       AUTO_UPDATE_CONTAINERS+=("plex")
     fi
     AUTO_UPDATE_CONTAINERS+=("watchtower")
     
-    # Let user select which containers to auto-update
-    header "Select Containers for Auto-Updates"
-    echo "Choose which containers you want Watchtower to automatically update:"
+    select_auto_update_containers
     
-    # Clear containers array and ask again for each container to confirm
-    AUTO_UPDATE_CONTAINERS=()
-    
-    # Ask about updating DMB
-    read -p "Auto-update DMB? (Y/n): " UPDATE_CHOICE
-    UPDATE_CHOICE=${UPDATE_CHOICE:-y}
-    if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
-      AUTO_UPDATE_CONTAINERS+=("DMB")
-      success "Added ${CYAN}DMB${NC} to auto-update list"
-    else
-      log "Excluded DMB from auto-updates"
-    fi
-    
-    # Ask about updating Plex if it's being deployed
-    if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
-      read -p "Auto-update Plex? (Y/n): " UPDATE_CHOICE
-      UPDATE_CHOICE=${UPDATE_CHOICE:-y}
-      if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
-        AUTO_UPDATE_CONTAINERS+=("plex")
-        success "Added ${CYAN}plex${NC} to auto-update list"
-      else
-        log "Excluded plex from auto-updates"
-      fi
-    fi
-    
-    # Always ask about Watchtower itself
-    read -p "Auto-update Watchtower itself? (Y/n): " UPDATE_CHOICE
-    UPDATE_CHOICE=${UPDATE_CHOICE:-y}
-    if [[ "${UPDATE_CHOICE,,}" == "y" || "${UPDATE_CHOICE,,}" == "yes" ]]; then
-      AUTO_UPDATE_CONTAINERS+=("watchtower")
-      success "Added ${CYAN}watchtower${NC} to auto-update list"
-    else
-      log "Excluded watchtower from auto-updates"
-    fi
-    
-          # Setup Discord notifications
     setup_discord_notifications
     
-    cat >> "$DMB_COMPOSE_FILE" <<EOF
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
-      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE}
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_REMOVE_VOLUMES=false
-      - WATCHTOWER_INCLUDE_STOPPED=true
-      - WATCHTOWER_LABEL_ENABLE=true
-EOF
-
-    # Add Discord notifications if configured
-    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
-      # Extract the webhook ID and token from the URL correctly
-      if [[ "$DISCORD_WEBHOOK_URL" =~ discord.com/api/webhooks/([0-9]+)/([a-zA-Z0-9_-]+) ]]; then
-        WEBHOOK_ID="${BASH_REMATCH[1]}"
-        WEBHOOK_TOKEN="${BASH_REMATCH[2]}"
-        
-        cat >> "$DMB_COMPOSE_FILE" <<EOF
-      - WATCHTOWER_NOTIFICATIONS=shoutrrr
-      - WATCHTOWER_NOTIFICATION_URL=discord://${WEBHOOK_TOKEN}@${WEBHOOK_ID}
-EOF
-      else
-        warning "Invalid Discord webhook URL format. Notifications will not be enabled."
-      fi
-    fi
-
-    # Add label for auto-updates if Watchtower should update itself
-    if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" watchtower "* ]]; then
-      cat >> "$DMB_COMPOSE_FILE" <<EOF
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-EOF
-    else
-      cat >> "$DMB_COMPOSE_FILE" <<EOF
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
-EOF
-    fi
-
-    success "Added Watchtower for automatic updates with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
-  fi
-  
-  # Deploy the stack based on Portainer detection
-  if [ "$USING_PORTAINER" = true ]; then
-    # Guide user to deploy through Portainer
-    echo -e "${YELLOW}IMPORTANT: Portainer detected${NC}"
-    echo -e "Please go to Portainer at ${CYAN}https://${SERVER_IP}:9443${NC} and:"
-    echo "1. Create a new stack named 'DMB'"
-    echo "2. Copy the Docker Compose configuration below"
-    echo "3. Deploy the stack through the Portainer interface"
-    echo -e "${CYAN}Here is the Docker Compose configuration:${NC}"
-    cat "$DMB_COMPOSE_FILE"
-    read -p "Press Enter once you've created and deployed the stack in Portainer..."
-    success "DMB deployment prepared through Portainer"
+    success "Watchtower will be installed with schedule: ${CYAN}${WATCHTOWER_SCHEDULE}${NC}"
   else
-    # Deploy directly
-    log "Deploying DMB stack..."
-    cd $(dirname "$DMB_COMPOSE_FILE") && docker compose up -d
-    
-    if [ $? -eq 0 ]; then
-      success "DMB stack deployed successfully"
-    else
-      error "Failed to deploy DMB stack"
-      return 1
-    fi
+    INSTALL_WATCHTOWER=false
+    log "Skipping Watchtower installation"
   fi
   
-  # Display completion info
+  log "Pulling required Docker images for RIVEN/DMB..."
+  pull_docker_image "iampuid0/dmb:latest"
+  
+  if [ "$DEPLOY_PLEX" = true ]; then
+    pull_docker_image "plexinc/pms-docker:latest"
+  fi
+  
+  if [ "$INSTALL_WATCHTOWER" = true ]; then
+    pull_docker_image "containrrr/watchtower:latest"
+  fi
+  
+  generate_dmb_docker_compose
+  
+  deploy_containers
+  
   echo
   echo -e "${BOLD}${GREEN}=========================================================================${NC}"
-  echo -e "${BOLD}${CYAN}                 DMB Setup Complete!                                    ${NC}"
+  echo -e "${BOLD}${CYAN}                 RIVEN/DMB Setup Complete!                                ${NC}"
   echo -e "${BOLD}${GREEN}=========================================================================${NC}"
   echo
   echo -e "${BOLD}Service Access Information:${NC}"
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "DMB Frontend:          ${CYAN}http://${SERVER_IP}:3005${NC}"
-  echo -e "Riven Frontend:        ${CYAN}http://${SERVER_IP}:3000${NC}"
+  echo -e "DMB Dashboard:         ${CYAN}http://${SERVER_IP}:3005${NC}"
+  echo -e "RIVEN Interface:       ${CYAN}http://${SERVER_IP}:3000${NC}"
   echo -e "pgAdmin 4:             ${CYAN}http://${SERVER_IP}:5050${NC}"
   
-  if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
+  if [ "$DEPLOY_PLEX" = true ]; then
     echo -e "Plex:                  ${CYAN}http://${SERVER_IP}:32400/web${NC}"
   fi
   
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
   echo -e "DMB Data Location:     ${CYAN}${BASE_DIR}/DMB${NC}"
-  echo -e "Docker Compose File:   ${CYAN}${DMB_COMPOSE_FILE}${NC}"
+  echo -e "Docker Compose File:   ${CYAN}${BASE_DIR}/docker-compose.yml${NC}"
   
-  if [[ "${DEPLOY_PLEX,,}" == "y" || "${DEPLOY_PLEX,,}" == "yes" ]]; then
+  if [ "$DEPLOY_PLEX" = true ]; then
     echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
     echo -e "${YELLOW}IMPORTANT PLEX SETUP INFORMATION:${NC}"
     echo -e "- When adding libraries to Plex, use the ${CYAN}/mnt${NC} folder (not /data)"
     echo -e "- The /data mount point should NOT be added to your Plex libraries"
+  fi
+  
+  if [ "$INSTALL_WATCHTOWER" = true ]; then
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    echo -e "${BOLD}Automatic Updates:${NC}"
+    echo -e "Watchtower is configured to automatically update containers using schedule:"
+    echo -e "  ${CYAN}${WATCHTOWER_SCHEDULE}${NC} (cron format)"
+    echo -e "Auto-updated containers:"
+    for container in "${AUTO_UPDATE_CONTAINERS[@]}"; do
+      echo -e "  - ${CYAN}${container}${NC}"
+    done
+    
+    if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
+      echo -e "Discord notifications are enabled for updates"
+    fi
+  fi
+  
+  echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+  echo -e "${YELLOW}NOTE: It may take some time for the RIVEN/DMB services to fully initialize${NC}"
+  echo -e "${YELLOW}TIP: Check the logs with: docker logs DMB${NC}"
+  echo -e "${MAGENTA}==========================================================================${NC}"
+  
+  echo -e "\n${YELLOW}Would you like to reboot your system now?${NC}"
+  read -p "y/N: " REBOOT_CHOICE
+  REBOOT_CHOICE=${REBOOT_CHOICE:-n}
+  
+  if [[ "${REBOOT_CHOICE,,}" == "y" || "${REBOOT_CHOICE,,}" == "yes" ]]; then
+    log "Rebooting system..."
+    reboot
+  else
+    log "Reboot skipped. You may need to reboot manually for all changes to take effect."
+  fi
+  
+  return 0
+}
+
+install_new_setup() {
+  header "New CLI-based Installation"
+  
+  setup_package_manager
+  
+  install_prerequisites
+  
+  setup_directories
+  
+  if ! install_docker; then
+    error "Docker installation failed. Cannot continue."
+    return 1
+  fi
+  
+  if ! install_rclone; then
+    error "rclone installation failed. Cannot continue."
+    return 1
+  fi
+  
+  check_existing_containers
+  
+  if ! get_rd_api_key; then
+    return 1
+  fi
+  
+  select_media_components
+  
+  setup_configs
+  
+  log "Pulling required Docker images for CLI-based setup..."
+  pull_docker_image "ghcr.io/debridmediamanager/zurg-testing:latest"
+  pull_docker_image "$CLI_DEBRID_IMAGE"
+  
+  if [[ "$MEDIA_SERVER" != "none" ]]; then
+    pull_docker_image "$MEDIA_SERVER_IMAGE"
+  fi
+  
+  if [[ "$REQUEST_MANAGER" != "none" ]]; then
+    pull_docker_image "$REQUEST_MANAGER_IMAGE"
+  fi
+  
+  if [[ "$INSTALL_JACKETT" == "true" ]]; then
+    pull_docker_image "linuxserver/jackett:latest"
+  fi
+  
+  if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+    pull_docker_image "ghcr.io/flaresolverr/flaresolverr:latest"
+  fi
+  
+  if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
+    pull_docker_image "containrrr/watchtower:latest"
+  fi
+  
+  if [[ "$INSTALL_PORTAINER" == "true" ]]; then
+    if ! docker ps -q -f name=portainer | grep -q .; then
+      log "Installing Portainer..."
+      pull_docker_image "portainer/portainer-ce:latest"
+      docker volume create portainer_data
+      docker run -d -p 8000:8000 -p 9443:9443 --name portainer --restart=always \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v portainer_data:/data portainer/portainer-ce:latest
+      
+      if docker ps -q -f name=portainer | grep -q .; then
+        success "Portainer installed successfully at ${CYAN}https://${SERVER_IP}:9443${NC}"
+      else 
+        error "Failed to start Portainer"
+      fi
+    else
+      log "Portainer is already running"
+    fi
+  fi
+  
+  generate_docker_compose
+  
+  deploy_containers
+  
+  log "Enabling and starting rclone service..."
+  systemctl daemon-reload
+  systemctl enable zurg-rclone.service
+  systemctl start zurg-rclone.service
+  
+  echo "Waiting for Docker containers to initialize..."
+  sleep 10
+  
+  test_zurg_connection
+  
+  backup_system
+  
+  display_completion_info
+}
+
+display_completion_info() {
+  detect_server_ip
+  
+  local IS_DMB_SETUP=false
+  if [[ "$INSTALL_TYPE" == "dmb" ]] || docker ps -a -q -f name="DMB" | grep -q .; then
+    IS_DMB_SETUP=true
+  fi
+  
+  echo
+  echo -e "${BOLD}${GREEN}=========================================================================${NC}"
+  
+  if [ "$IS_DMB_SETUP" = true ]; then
+    echo -e "${BOLD}${CYAN}                      RIVEN/DMB Setup Complete!                         ${NC}"
+    
+    echo -e "${BOLD}${GREEN}=========================================================================${NC}"
+    echo
+    echo -e "${BOLD}Service Access Information:${NC}"
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    echo -e "DMB Dashboard:         ${CYAN}http://${SERVER_IP}:3005${NC}"
+    echo -e "RIVEN Interface:       ${CYAN}http://${SERVER_IP}:3000${NC}"
+    echo -e "pgAdmin 4:             ${CYAN}http://${SERVER_IP}:5050${NC}"
+    
+    if [[ "$DEPLOY_PLEX" == "true" ]] || docker ps -a -q -f name="plex" | grep -q .; then
+      echo -e "Plex:                  ${CYAN}http://${SERVER_IP}:32400/web${NC}"
+    fi
+    
+    if [[ "$INSTALL_PORTAINER" == "true" ]] || is_portainer_running; then
+      echo -e "Portainer:             ${CYAN}https://${SERVER_IP}:9443${NC}"
+    fi
+    
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    BASE_DIR="/home/$(id -un)/docker"
+    echo -e "DMB Data Location:     ${CYAN}${BASE_DIR}/DMB${NC}"
+    echo -e "Docker Compose File:   ${CYAN}${BASE_DIR}/docker-compose.yml${NC}"
+    
+    if [[ "$DEPLOY_PLEX" == "true" ]] || docker ps -a -q -f name="plex" | grep -q .; then
+      echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+      echo -e "${YELLOW}IMPORTANT PLEX SETUP INFORMATION:${NC}"
+      echo -e "- When adding libraries to Plex, use the ${CYAN}/mnt${NC} folder (not /data)"
+      echo -e "- The /data mount point should NOT be added to your Plex libraries"
+    fi
+  else
+    echo -e "${BOLD}${CYAN}                      CLI-based Setup Complete!                        ${NC}"
+    
+    echo -e "${BOLD}${GREEN}=========================================================================${NC}"
+    echo
+    echo -e "${BOLD}Service Access Information:${NC}"
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    echo -e "Zurg:                  ${CYAN}http://${SERVER_IP}:9999/dav/${NC}"
+    echo -e "cli_debrid:            ${CYAN}http://${SERVER_IP}:5000${NC}"
+    
+    if [[ "$MEDIA_SERVER" == "plex" ]]; then
+      echo -e "Plex:                  ${CYAN}http://${SERVER_IP}:32400/web${NC}"
+    elif [[ "$MEDIA_SERVER" == "jellyfin" ]]; then
+      echo -e "Jellyfin:              ${CYAN}http://${SERVER_IP}:8096${NC}"
+    elif [[ "$MEDIA_SERVER" == "emby" ]]; then
+      echo -e "Emby:                  ${CYAN}http://${SERVER_IP}:8096${NC}"
+    fi
+    
+    if [[ "$REQUEST_MANAGER" != "none" ]]; then
+      echo -e "${REQUEST_MANAGER^}:           ${CYAN}http://${SERVER_IP}:5055${NC}"
+    fi
+    
+    if [[ "$INSTALL_JACKETT" == "true" ]]; then
+      echo -e "Jackett:               ${CYAN}http://${SERVER_IP}:9117${NC}"
+    fi
+    
+    if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+      echo -e "FlareSolverr:          ${CYAN}http://${SERVER_IP}:8191${NC}"
+    fi
+    
+    if [[ "$INSTALL_PORTAINER" == "true" ]] || is_portainer_running; then
+      echo -e "Portainer:             ${CYAN}https://${SERVER_IP}:9443${NC}"
+    fi
+    
+    echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
+    echo -e "Media Directory:        ${CYAN}/mnt${NC}"
+    echo -e "Mounted Content:        ${CYAN}/mnt/zurg${NC}"
+    echo -e "Symlinked Directory:    ${CYAN}/mnt/symlinked${NC}"
+    echo -e "Configuration Paths:"
+    echo -e "  Zurg Config:          ${CYAN}/home/config.yml${NC}"
+    echo -e "  Webhook Script:       ${CYAN}/home/plex_update.sh${NC}"
+    echo -e "  cli_debrid Config:    ${CYAN}/user/config/settings.json${NC}" 
+    echo -e "  cli_debrid Logs:      ${CYAN}/user/logs/debug.log${NC}"
+    if [[ "$INSTALL_JACKETT" == "true" ]]; then
+      echo -e "  Jackett Config:       ${CYAN}/jackett/config${NC}"
+    fi
+    echo -e "  Backup Directory:     ${CYAN}/backup${NC}"
   fi
   
   if [[ "$INSTALL_WATCHTOWER" == "true" ]]; then
@@ -2673,14 +2801,57 @@ EOF
   fi
   
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "${YELLOW}NOTE: It may take some time for the DMB services to fully initialize${NC}"
-  echo -e "${YELLOW}TIP: Check the logs with: docker logs DMB${NC}"
+  
+  if [ "$IS_DMB_SETUP" = true ]; then
+    echo -e "${YELLOW}NOTE: It may take some time for the RIVEN/DMB services to fully initialize${NC}"
+    echo -e "${YELLOW}TIP: Check the logs with: docker logs DMB${NC}"
+  else
+    echo -e "${YELLOW}NOTE: It may take some time for media to appear. Please be patient.${NC}"
+    if [[ "$INSTALL_JACKETT" == "true" ]]; then
+      echo -e "${YELLOW}NOTE: Configure Jackett at http://${SERVER_IP}:9117${NC}"
+      echo -e "      - Get the API Key from the Jackett web interface"
+      echo -e "      - Configure your preferred indexers in Jackett"
+      echo -e "      - Use the API Key to connect your media applications to Jackett"
+      
+      if [[ "$INSTALL_FLARESOLVERR" == "true" ]]; then
+        echo -e "      - In Jackett, go to Settings and set FlareSolverr API URL to: ${CYAN}http://${SERVER_IP}:8191${NC}"
+        echo -e "      - This allows Jackett to bypass Cloudflare protection on supported indexers"
+      fi
+    fi
+  fi
+  
   echo -e "${MAGENTA}==========================================================================${NC}"
   
-  return 0
+  echo -e "\n${YELLOW}Would you like to reboot your system now?${NC}"
+  read -p "y/N: " REBOOT_CHOICE
+  REBOOT_CHOICE=${REBOOT_CHOICE:-n}
+  
+  if [[ "${REBOOT_CHOICE,,}" == "y" || "${REBOOT_CHOICE,,}" == "yes" ]]; then
+    log "Rebooting system..."
+    reboot
+  else
+    log "Reboot skipped. You may need to reboot manually for all changes to take effect."
+  fi
 }
 
-# Main menu function
+select_installation_type() {
+  header "Installation Type Selection"
+  echo "Choose the type of installation:"
+  echo "1) CLI-based (Zurg, cli_debrid, etc. separately)"
+  echo "2) RIVEN/DMB All-in-One (Includes RIVEN, Zurg, plex_debrid, etc.)"
+  
+  read -p "Select option [1]: " INSTALL_TYPE_CHOICE
+  INSTALL_TYPE_CHOICE=${INSTALL_TYPE_CHOICE:-1}
+  
+  if [[ "$INSTALL_TYPE_CHOICE" == "2" ]]; then
+    INSTALL_TYPE="dmb"
+    success "Selected installation type: ${CYAN}RIVEN/DMB All-in-One${NC}"
+  else
+    INSTALL_TYPE="individual"
+    success "Selected installation type: ${CYAN}CLI-based${NC}"
+  fi
+}
+
 show_main_menu() {
   while true; do
     header "Debrid Media Stack Setup"
@@ -2691,12 +2862,11 @@ show_main_menu() {
     echo "5) Repair/check installation"
     echo "6) Exit"
    
-   read -p "Select an option [1]: " MENU_CHOICE
+    read -p "Select an option [1]: " MENU_CHOICE
     MENU_CHOICE=${MENU_CHOICE:-1}
     
     case "$MENU_CHOICE" in
       1)
-        # Ask for installation type before proceeding
         select_installation_type
         if [[ "$INSTALL_TYPE" == "dmb" ]]; then
           install_dmb
@@ -2725,21 +2895,13 @@ show_main_menu() {
         ;;
     esac
     
-    # Ask if user wants to continue with the menu or exit
     echo
-    read -p "Return to main menu? (y/N): " CONTINUE_MENU
-    CONTINUE_MENU=${CONTINUE_MENU:-n}
-    
-    if [[ "${CONTINUE_MENU,,}" != "y" && "${CONTINUE_MENU,,}" != "yes" ]]; then
-      log "Exiting setup script"
-      exit 0
-    fi
+    echo -e "${YELLOW}Returning to main menu in 3 seconds...${NC}"
+    sleep 3
   done
 }
 
-# Initialize server IP at startup
 detect_server_ip
 
-# Execute main function
 setup_package_manager
 show_main_menu
