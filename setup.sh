@@ -1331,7 +1331,7 @@ services:
       - /home/config.yml:/app/config.yml
       - /home/plex_update.sh:/app/plex_update.sh
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
 EOF
 
   if [[ " ${AUTO_UPDATE_CONTAINERS[*]} " == *" zurg "* ]]; then
@@ -1362,7 +1362,7 @@ EOF
       - /user:/user
       - /mnt:/mnt
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
     depends_on:
       - zurg
 EOF
@@ -1403,7 +1403,7 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
     volumes:
       - /mnt:/mnt
 EOF
@@ -1453,7 +1453,7 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
     depends_on:
       - ${MEDIA_SERVER}
 EOF
@@ -1485,7 +1485,7 @@ EOF
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - AUTO_UPDATE=true
 EOF
 
@@ -1513,7 +1513,7 @@ EOF
       - "8191:8191"
     environment:
       - LOG_LEVEL=info
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - CAPTCHA_SOLVER=none
 EOF
 
@@ -1540,7 +1540,7 @@ EOF
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-"0 3 * * *"}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
@@ -1633,7 +1633,7 @@ services:
       - ${BASE_DIR}/DMB/Zilean/data:/zilean/app/data
       - ${BASE_DIR}/DMB/plex_debrid:/plex_debrid/config
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - PUID=${CURRENT_UID}
       - PGID=${CURRENT_GID}
       - DMB_LOG_LEVEL=INFO
@@ -1682,7 +1682,7 @@ EOF
       - ${BASE_DIR}/DMB/Zurg/mnt:/data
       - ${BASE_DIR}/DMB/Riven/mnt:/mnt
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - PLEX_UID=${CURRENT_UID}
       - PLEX_GID=${CURRENT_GID}
       - PLEX_CLAIM=${PLEX_CLAIM}
@@ -1716,7 +1716,7 @@ EOF
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - TZ="${TIMEZONE:-Etc/UTC}"
+      - TZ=${TIMEZONE:-Etc/UTC}
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-"0 3 * * *"}
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REMOVE_VOLUMES=false
