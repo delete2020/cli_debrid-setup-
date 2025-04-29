@@ -637,7 +637,7 @@ get_rd_api_key() {
   fi
   
   echo -e "${YELLOW}Enter Real-Debrid API key${NC} (will remain on your system): "
-  read -s RD_API_KEY
+  read RD_API_KEY # Key will be visible when typing or pasting
   echo
   
   if [ -z "$RD_API_KEY" ]; then
