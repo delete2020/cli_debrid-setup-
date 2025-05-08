@@ -1605,6 +1605,8 @@ generate_dmb_docker_compose() {
   mkdir -p ${BASE_DIR}/DMB/pgAdmin4/data
   mkdir -p ${BASE_DIR}/DMB/Zilean/data
   mkdir -p ${BASE_DIR}/DMB/plex_debrid
+  mkdir -p ${BASE_DIR}/DMB/cli_debrid
+  mkdir -p ${BASE_DIR}/DMB/phalanx_db  
   
   success "Created DMB directory structure at ${CYAN}${BASE_DIR}/DMB${NC}"
   
@@ -1632,6 +1634,8 @@ services:
       - ${BASE_DIR}/DMB/pgAdmin4/data:/pgadmin/data
       - ${BASE_DIR}/DMB/Zilean/data:/zilean/app/data
       - ${BASE_DIR}/DMB/plex_debrid:/plex_debrid/config
+      - ${BASE_DIR}/DMB/cli_debrid:/cli_debrid/data
+      - ${BASE_DIR}/DMB/phalanx_db:/phalanx_db/data
     environment:
       - TZ=${TIMEZONE:-Etc/UTC}
       - PUID=${CURRENT_UID}
@@ -1643,6 +1647,7 @@ services:
       - "3005:3005"
       - "3000:3000"
       - "5050:5050"
+      - "5000:5000"
     devices:
       - /dev/fuse:/dev/fuse:rwm
     cap_add:
@@ -2437,7 +2442,7 @@ repair_installation() {
 }
 
 install_dmb() {
-  header "Installing RIVEN/DMB"
+  header "Installing DMB"
   
   detect_server_ip
   
@@ -2463,7 +2468,7 @@ install_dmb() {
   TIMEZONE=${CUSTOM_TIMEZONE:-$SYSTEM_TIMEZONE}
   log "Using timezone: ${CYAN}${TIMEZONE}${NC}"
   
-  echo "Do you want to deploy a Plex container to work with RIVEN/DMB?"
+  echo "Do you want to deploy a Plex container to work with DMB?"
   read -p "Y/n: " DEPLOY_PLEX_CHOICE
   DEPLOY_PLEX_CHOICE=${DEPLOY_PLEX_CHOICE:-y}
   
@@ -2473,7 +2478,7 @@ install_dmb() {
     echo -e "${YELLOW}Enter Plex claim token${NC} (from https://www.plex.tv/claim/): "
     read PLEX_CLAIM
     
-    success "Plex will be installed with RIVEN/DMB"
+    success "Plex will be installed with DMB"
   else
     DEPLOY_PLEX=false
     log "Skipping Plex installation"
@@ -2529,7 +2534,7 @@ install_dmb() {
     log "Skipping Watchtower installation"
   fi
   
-  log "Pulling required Docker images for RIVEN/DMB..."
+  log "Pulling required Docker images for DMB..."
   pull_docker_image "iampuid0/dmb:latest"
   
   if [ "$DEPLOY_PLEX" = true ]; then
@@ -2546,13 +2551,14 @@ install_dmb() {
   
   echo
   echo -e "${BOLD}${GREEN}=========================================================================${NC}"
-  echo -e "${BOLD}${CYAN}                 RIVEN/DMB Setup Complete!                                ${NC}"
+  echo -e "${BOLD}${CYAN}                 DMB Setup Complete!                                      ${NC}"
   echo -e "${BOLD}${GREEN}=========================================================================${NC}"
   echo
   echo -e "${BOLD}Service Access Information:${NC}"
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
   echo -e "DMB Dashboard:         ${CYAN}http://${SERVER_IP}:3005${NC}"
   echo -e "RIVEN Interface:       ${CYAN}http://${SERVER_IP}:3000${NC}"
+  echo -e "cli_debrid Interface:  ${CYAN}http://${SERVER_IP}:5000${NC}"  
   echo -e "pgAdmin 4:             ${CYAN}http://${SERVER_IP}:5050${NC}"
   
   if [ "$DEPLOY_PLEX" = true ]; then
@@ -2586,7 +2592,7 @@ install_dmb() {
   fi
   
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
-  echo -e "${YELLOW}NOTE: It may take some time for the RIVEN/DMB services to fully initialize${NC}"
+  echo -e "${YELLOW}NOTE: It may take some time for the DMB services to fully initialize${NC}"
   echo -e "${YELLOW}TIP: Check the logs with: docker logs DMB${NC}"
   echo -e "${MAGENTA}==========================================================================${NC}"
   
@@ -2707,7 +2713,7 @@ display_completion_info() {
   echo -e "${BOLD}${GREEN}=========================================================================${NC}"
   
   if [ "$IS_DMB_SETUP" = true ]; then
-    echo -e "${BOLD}${CYAN}                      RIVEN/DMB Setup Complete!                         ${NC}"
+    echo -e "${BOLD}${CYAN}                      DMB Setup Complete!                         ${NC}"
     
     echo -e "${BOLD}${GREEN}=========================================================================${NC}"
     echo
@@ -2803,7 +2809,7 @@ display_completion_info() {
   echo -e "${MAGENTA}-------------------------------------------------------------------------${NC}"
   
   if [ "$IS_DMB_SETUP" = true ]; then
-    echo -e "${YELLOW}NOTE: It may take some time for the RIVEN/DMB services to fully initialize${NC}"
+    echo -e "${YELLOW}NOTE: It may take some time for the DMB services to fully initialize${NC}"
     echo -e "${YELLOW}TIP: Check the logs with: docker logs DMB${NC}"
   else
     echo -e "${YELLOW}NOTE: It may take some time for media to appear. Please be patient.${NC}"
@@ -2838,14 +2844,14 @@ select_installation_type() {
   header "Installation Type Selection"
   echo "Choose the type of installation:"
   echo "1) CLI-based (Zurg, cli_debrid, etc. separately)"
-  echo "2) RIVEN/DMB All-in-One (Includes RIVEN, Zurg, plex_debrid, etc.)"
+  echo "2) DMB All-in-One (Includes RIVEN, cli_debrid, Zurg, plex_debrid, etc.)"
   
   read -p "Select option [1]: " INSTALL_TYPE_CHOICE
   INSTALL_TYPE_CHOICE=${INSTALL_TYPE_CHOICE:-1}
   
   if [[ "$INSTALL_TYPE_CHOICE" == "2" ]]; then
     INSTALL_TYPE="dmb"
-    success "Selected installation type: ${CYAN}RIVEN/DMB All-in-One${NC}"
+    success "Selected installation type: ${CYAN}DMB All-in-One${NC}"
   else
     INSTALL_TYPE="individual"
     success "Selected installation type: ${CYAN}CLI-based${NC}"
