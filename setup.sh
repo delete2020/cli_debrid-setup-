@@ -785,7 +785,7 @@ ExecStart=/usr/bin/rclone mount \\
   --allow-other \\
   --poll-interval 60s \\
   --vfs-cache-poll-interval 30s \\
-  --dir-cache-time=120s \\
+  --dir-cache-time=10s \\
   --exclude="**sample**" \\
 EOF
 
