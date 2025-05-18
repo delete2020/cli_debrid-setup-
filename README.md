@@ -1,81 +1,193 @@
-## Debrid Media Stack Setup Script
+# Debrid Media Stack Setup Script
 
-## Cross-distribution Compatibility: Works across Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, and more
+A comprehensive solution for deploying and managing debrid-based media servers on Linux systems. This script provides a user-friendly way to set up a complete media stack with Real-Debrid integration.
 
-## Backup & Restore Functionality: Create and restore complete system backups
-## VPS Detection & Optimization: Automatically optimizes settings for VPS environments
-## Improved Error Handling: Robust validation and recovery mechanisms
-## Advanced rclone Deployment: Enhanced FUSE integration with fallback options
-## Automatic Updates: Container updates via Watchtower integration
-## Portainer Support: Proper detection and integration with Portainer
-## DMB All-in-One Option: New option to install Debrid Media Bridge with integrated components
+## Key Features
 
-Installation Options
-Two installation paths are now available:
+### Cross-distribution Compatibility
+Works seamlessly across multiple Linux distributions including:
+- Debian & Ubuntu-based systems
+- RHEL, Fedora, CentOS, Rocky Linux
+- Arch, Manjaro, EndeavourOS
+- openSUSE & SUSE Linux
+- Alpine Linux
+- And more!
 
-Individual Containers: Traditional setup with separate components
-DMB All-in-One: Integrated Debrid Media Bridge including Riven, plex_debrid, Zurg, etc.
+### Smart Detection and Optimization
+- **Multi-Architecture Support**: Automatic detection of AMD64 and ARM64 architectures
+- **Auto IP Detection**: Automatically finds your server's IP address
+- **FUSE Optimization**: Detects and implements the best available FUSE version for performance
+- **Timezone Configuration**: Automatically detects and allows custom timezone settings
+- **Discord Notifications**: Optional webhook integration for update notifications
 
-Installation
+### Installation Options
+Two flexible installation paths are available:
+
+1. **Individual Containers Setup**
+   - Traditional setup with separate components
+   - Greater customization of individual services
+   - Fine-grained control over each component
+
+2. **DMB All-in-One Solution**
+   - Integrated Debrid Media Bridge with:
+     - RIVEN frontend & backend
+     - plex_debrid integration
+     - Zurg bridge with advanced configuration
+     - cli_debrid integration with web UI
+     - Streamlined user interface
+     - Centralized management
+
+### System Management
+- **Backup & Restore Functionality**: Create and restore complete system backups
+- **VPS Detection & Optimization**: Automatically optimizes settings for limited resource environments
+- **Improved Error Handling**: Robust validation and recovery mechanisms
+- **Automatic Updates**: Container updates via Watchtower integration
+- **Portainer Support**: Proper detection and integration with Portainer
+
+## Installation
+
 Run this command to download and execute the script:
+
+```bash
 sudo curl -sO https://raw.githubusercontent.com/delete2020/cli_debrid-setup-/main/setup.sh && sudo chmod +x setup.sh && sudo ./setup.sh
-Components
-Core Components:
+```
 
-Zurg: Bridge between Real-Debrid and your media server
-cli_debrid: Management interface for Real-Debrid content
+## Components
 
-Media Server Options:
+### Core Components
 
-Plex
-Jellyfin
-Emby
+- **Zurg**: Bridge between Real-Debrid and your media server
+  - WebDAV interface for media files
+  - Automatic folder organization
+  - Real-time content updates
 
-Request Manager Options:
+- **cli_debrid**: Management interface for Real-Debrid content
+  - Web UI for browsing Real-Debrid files
+  - Instant access to torrents and downloads
+  - Streaming capabilities
 
-Overseerr (best with Plex)
-Jellyseerr (best with Jellyfin)
+### Media Server Options
 
-Supplementary Tools:
+- **Plex**: Full-featured media server with streaming to multiple devices
+- **Jellyfin**: Open-source media solution with no premium limitations
+- **Emby**: Flexible media server with advanced customization
 
-Jackett: Torrent indexer integration
-FlareSolverr: Cloudflare protection bypass
-Portainer: Docker management UI
-Watchtower: Automatic container updates
+### Request Manager Options
 
-System Requirements
+- **Overseerr**: Media request system optimized for Plex
+- **Jellyseerr**: Fork of Overseerr designed to work with Jellyfin
 
-Linux system (wide distribution support)
-Root access
-Internet connection
-Real-Debrid account and API key
+### Supplementary Tools
 
-Post-Installation Access
+- **Jackett**: Torrent indexer proxy
+- **FlareSolverr**: Cloudflare protection bypass
+- **Portainer**: Docker management UI
+- **Watchtower**: Automatic container updates
+
+## System Requirements
+
+- Linux system (wide distribution support)
+- Root access
+- Internet connection
+- Real-Debrid account and API key
+- Minimum 1GB RAM (2GB+ recommended)
+- 10GB+ available storage space
+
+## Post-Installation Access
+
 After successful installation, you'll access your services at:
 
-Zurg WebDAV: http://your-ip:9999/dav/
-cli_debrid UI: http://your-ip:5000
-Media server (Plex/Jellyfin/Emby): Respective ports
-Request manager: http://your-ip:5055
-Jackett: http://your-ip:9117
-FlareSolverr: http://your-ip:8191
-Portainer: https://your-ip:9443
-DMB Frontend (if selected): http://your-ip:3005
-Riven Frontend (if DMB selected): http://your-ip:3000
+| Service | URL | Description |
+|---------|-----|-------------|
+| Zurg WebDAV | `http://your-ip:9999/dav/` | Mount point for media files |
+| cli_debrid UI | `http://your-ip:5000` | Web interface for RD management |
+| Plex | `http://your-ip:32400/web` | Plex media server interface |
+| Jellyfin | `http://your-ip:8096` | Jellyfin media server interface |
+| Emby | `http://your-ip:8096` | Emby media server interface |
+| Overseerr/Jellyseerr | `http://your-ip:5055` | Request manager interface |
+| Jackett | `http://your-ip:9117` | Torrent indexer configuration |
+| FlareSolverr | `http://your-ip:8191` | Cloudflare bypass service |
+| Portainer | `https://your-ip:9443` | Docker management interface |
+| DMB Frontend | `http://your-ip:3005` | DMB management interface |
+| Riven Frontend | `http://your-ip:3000` | Riven interface |
+| cli_debrid UI (DMB) | `http://your-ip:5000` | Web interface for RD management (within DMB) |
 
-Maintenance Functions
-The script now includes enhanced maintenance capabilities:
+## Maintenance Functions
 
-Create system backups
-Restore from previous backups
-Repair installations
-Update existing setups
-VPS-specific optimizations
+The script includes enhanced maintenance capabilities:
 
-Troubleshooting
+- **Create System Backups**: Save your entire configuration for later recovery
+- **Restore from Backups**: Easily restore your setup from previous backups
+- **Repair Installations**: Automatically fix common issues
+- **Update Existing Setups**: Keep your installation up-to-date with the latest improvements
+- **VPS-specific Optimizations**: Special settings for limited resource environments
+
+## Backup System
+
+The built-in backup system preserves all critical configuration files:
+
+- Container configurations and settings
+- Docker Compose files
+- API keys and service connections
+- Mount settings and systemd service files
+- Custom user configurations
+
+Backups are stored in the `/backup` directory and can be easily restored through the script's menu.
+
+## Migration Path
+
+The script allows for flexible deployment options:
+
+- Start with individual containers and later migrate to DMB
+- Perform complete system backups before major changes
+- Update from older setups to newer configurations
+- Repair installations while preserving user data
+
+## Performance Optimization
+
+The script includes several performance optimizations:
+
+- **VPS-specific Settings**: Reduced resource usage on limited hardware
+- **FUSE3 Implementation**: Modern, faster filesystem mounting when available
+- **Caching Optimizations**: Improved media loading speed through smart caching
+- **Concurrent Workers**: Configurable parallel processing based on available resources
+- **Multi-thread Transfers**: Optimized file transfers for better throughput
+
+## Logging and Monitoring
+
+Debug and monitoring features include:
+
+- **Centralized Logs**: All services log to accessible locations
+- **Startup Verification**: Automatic checks ensure services are running correctly
+- **Mount Monitoring**: Continuous checking of mount points and reconnection if needed
+
+## Troubleshooting
+
 If you encounter issues:
 
-Check container status: docker ps | grep container_name
-View logs: docker logs container_name
-Restart services: systemctl restart zurg-rclone.service
-Use the built-in repair function from the main menu
+- **Check container status**: `docker ps | grep container_name`
+- **View logs**: `docker logs container_name`
+- **Restart services**: `systemctl restart zurg-rclone.service`
+- **Use the built-in repair function** from the main menu
+- **Check mount points**: Verify `/mnt/zurg` is properly mounted
+
+## Advanced Configuration
+
+For advanced users, the script creates configuration files that can be manually edited:
+
+- **Zurg Configuration**: `/home/config.yml`
+- **cli_debrid Settings**: `/user/config/settings.json`
+- **Rclone Configuration**: `/root/.config/rclone/rclone.conf`
+- **Mount Service**: `/etc/systemd/system/zurg-rclone.service`
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is open source and available under the MIT License.
+
+## Community Resources
+
+- For issues and feature requests, please use the GitHub Issues page
