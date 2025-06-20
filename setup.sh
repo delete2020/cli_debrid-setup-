@@ -793,7 +793,6 @@ EOF
     cat >> "/etc/systemd/system/zurg-rclone.service" <<EOF
   --async-read=true \\
   --use-mmap \\
-  --fuse-flag=sync_read \\
 EOF
   fi
 
