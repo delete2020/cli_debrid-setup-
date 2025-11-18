@@ -1,0 +1,1108 @@
+#!/bin/bash
+
+# ==============================================================================
+# Enhanced Debrid Media Stack Setup Script v2.0
+# 
+# A comprehensive solution for deploying and managing debrid-based media servers.
+# Combines robust system management with modern media stack features.
+#
+# Core Features:
+# - Multi-OS Support (Debian, RHEL, Arch, Alpine)
+# - State Persistence & Automated Backups
+# - VPN Integration (Gluetun)
+# - Extensive Media Suite (Plex/Jellyfin, *Arr apps, Request Managers)
+# - Monitoring & Utilities (Netdata, Heimdall, Pi-hole, etc.)
+# - Robust Error Handling & Self-Repair
+# ==============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# --- Paths & Constants ---
+BASE_CONFIG_DIR="/opt/appdata"
+BASE_MOUNT_DIR="/mnt"
+BACKUP_DIR="/backup"
+STATE_FILE="/etc/debrid_installer/state.json"
+STATE_DIR="/etc/debrid_installer"
+LOG_FILE="/var/log/debrid_setup.log"
+
+# --- State Variables ---
+SERVER_IP=""
+TIMEZONE=""
+INSTALL_TYPE=""
+RD_API_KEY=""
+VPN_ENABLED=false
+VPN_PROVIDER=""
+VPN_USER=""
+VPN_PASS=""
+MEDIA_SERVER="none"
+REQUEST_MANAGER="none"
+PLEX_CLAIM=""
+ARR_APPS=()
+MONITOR_APPS=()
+UTILS_APPS=()
+AUTO_UPDATE_CONTAINERS=()
+
+# --- Utility Functions ---
+
+log() {
+  local MSG="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  echo -e "${BLUE}${MSG}${NC}"
+  echo "$MSG" >> "$LOG_FILE"
+}
+
+success() {
+  local MSG="[$(date '+%Y-%m-%d %H:%M:%S')] ✓ $*"
+  echo -e "${GREEN}${MSG}${NC}"
+  echo "$MSG" >> "$LOG_FILE"
+}
+
+warning() {
+  local MSG="[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ $*"
+  echo -e "${YELLOW}${MSG}${NC}"
+  echo "$MSG" >> "$LOG_FILE"
+}
+
+error() {
+  local MSG="[$(date '+%Y-%m-%d %H:%M:%S')] ✗ $*"
+  echo -e "${RED}${MSG}${NC}"
+  echo "$MSG" >> "$LOG_FILE"
+}
+
+header() {
+  echo -e "\n${BOLD}${MAGENTA}$*${NC}\n"
+}
+
+check_root() {
+  if [[ $(id -u) -ne 0 ]]; then 
+    error "This script must be run as root. Try: sudo $0"
+    exit 1
+  fi
+}
+
+# --- System Detection ---
+
+detect_server_ip() {
+  if [[ -n "$SERVER_IP" ]]; then return 0; fi
+  log "Detecting server IP address..."
+  
+  if command -v ip &>/dev/null; then
+    SERVER_IP=$(ip route get 1 | awk '{print $(NF-2);exit}' 2>/dev/null)
+  fi
+  
+  if [[ -z "$SERVER_IP" ]] && command -v hostname &>/dev/null; then
+    SERVER_IP=$(hostname -I | awk '{print $1}' 2>/dev/null)
+  fi
+  
+  if [[ -z "$SERVER_IP" ]] && command -v ifconfig &>/dev/null; then
+    SERVER_IP=$(ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | head -n 1)
+  fi
+  
+  if [[ -z "$SERVER_IP" ]]; then
+    warning "Could not detect server IP. Using localhost."
+    SERVER_IP="127.0.0.1"
+  else
+    success "Detected IP: ${CYAN}$SERVER_IP${NC}"
+  fi
+}
+
+detect_timezone() {
+  if command -v timedatectl &>/dev/null; then
+    SYSTEM_TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null)
+  fi
+  TIMEZONE=${SYSTEM_TIMEZONE:-"UTC"}
+  log "Detected timezone: ${CYAN}$TIMEZONE${NC}"
+}
+
+detect_os_arch() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID=$ID
+    OS_PRETTY_NAME=$PRETTY_NAME
+  else
+    OS_ID="unknown"
+    OS_PRETTY_NAME=$(uname -s)
+  fi
+  
+  ARCHITECTURE=$(uname -m)
+  if [[ "$ARCHITECTURE" == "aarch64" || "$ARCHITECTURE" == "arm64" ]]; then
+    ARCHITECTURE_TYPE="arm64"
+  else
+    ARCHITECTURE_TYPE="amd64"
+  fi
+  
+  log "OS: $OS_PRETTY_NAME ($ARCHITECTURE_TYPE)"
+}
+
+# --- Package Management ---
+
+setup_package_manager() {
+  case $OS_ID in
+    debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|deepin)
+      PKG_MANAGER="apt"
+      PKG_UPDATE="apt update"
+      PKG_INSTALL="apt install -y"
+      ;;
+    fedora|rhel|centos|rocky|almalinux|ol|scientific|amazon)
+      PKG_MANAGER="dnf"
+      PKG_UPDATE="dnf check-update"
+      PKG_INSTALL="dnf install -y"
+      ;;
+    arch|manjaro|endeavouros)
+      PKG_MANAGER="pacman"
+      PKG_UPDATE="pacman -Sy"
+      PKG_INSTALL="pacman -S --noconfirm"
+      ;;
+    alpine)
+      PKG_MANAGER="apk"
+      PKG_UPDATE="apk update"
+      PKG_INSTALL="apk add"
+      ;;
+    opensuse*|suse|sles)
+      PKG_MANAGER="zypper"
+      PKG_UPDATE="zypper refresh"
+      PKG_INSTALL="zypper install -y"
+      ;;
+    *)
+      warning "Unknown distribution. Defaulting to apt."
+      PKG_MANAGER="apt"
+      PKG_UPDATE="apt update"
+      PKG_INSTALL="apt install -y"
+      ;;
+  esac
+}
+
+install_prerequisites() {
+  header "Installing Prerequisites"
+  log "Updating package lists..."
+  eval "$PKG_UPDATE" || warning "Update encountered errors, continuing..."
+  
+  COMMON_PACKAGES="curl wget git jq ufw tar unzip"
+  log "Installing core tools: $COMMON_PACKAGES"
+  eval "$PKG_INSTALL $COMMON_PACKAGES"
+  
+  # FUSE Detection & Installation
+  if command -v fusermount3 &>/dev/null; then
+    FUSE3_INSTALLED=true
+    success "FUSE3 is installed"
+  elif command -v fusermount &>/dev/null; then
+    warning "Legacy FUSE detected"
+    FUSE3_INSTALLED=false
+  else
+    log "Installing FUSE..."
+    if [[ "$OS_ID" == "debian" || "$OS_ID" == "ubuntu" ]]; then
+      eval "$PKG_INSTALL fuse3" || eval "$PKG_INSTALL fuse"
+    else
+      eval "$PKG_INSTALL fuse"
+    fi
+    
+    if command -v fusermount3 &>/dev/null; then FUSE3_INSTALLED=true; else FUSE3_INSTALLED=false; fi
+  fi
+  
+  # Prepare State Directory
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  touch "$LOG_FILE"
+}
+
+# --- Docker & Rclone Installation (Robust) ---
+
+install_docker() {
+  if command -v docker &>/dev/null; then
+    success "Docker is already installed"
+    return 0
+  fi
+  
+  log "Installing Docker..."
+  if curl -fsSL https://get.docker.com | sh; then
+    systemctl enable docker
+    systemctl start docker
+    success "Docker installed successfully"
+  else
+    error "Docker install script failed. Attempting manual install..."
+    eval "$PKG_INSTALL docker.io docker-compose-plugin" || eval "$PKG_INSTALL docker docker-compose"
+  fi
+}
+
+install_rclone() {
+  if command -v rclone &>/dev/null; then
+    local VER=$(rclone --version | head -n 1)
+    success "rclone is installed: $VER"
+    return 0
+  fi
+  
+  log "Attempting rclone install via script..."
+  if curl -s https://rclone.org/install.sh | bash; then
+    success "rclone installed via script"
+    return 0
+  fi
+  
+  warning "Script install failed. Trying package manager..."
+  if eval "$PKG_INSTALL rclone"; then
+    success "rclone installed via package manager"
+    return 0
+  fi
+  
+  warning "Package manager failed. Trying manual binary install..."
+  local URL="https://downloads.rclone.org/rclone-current-linux-${ARCHITECTURE_TYPE}.zip"
+  local TMP=$(mktemp -d)
+  curl -L "$URL" -o "$TMP/rclone.zip"
+  unzip -q "$TMP/rclone.zip" -d "$TMP"
+  cp "$TMP"/rclone-*/rclone /usr/bin/
+  chmod 755 /usr/bin/rclone
+  rm -rf "$TMP"
+  
+  if command -v rclone &>/dev/null; then
+    success "rclone installed manually"
+  else
+    error "Failed to install rclone after all attempts."
+    exit 1
+  fi
+}
+
+# --- State Management ---
+
+save_state() {
+  log "Saving system state to $STATE_FILE..."
+  
+  # Convert arrays to json strings
+  local ARR_JSON=$(printf '%s\n' "${ARR_APPS[@]}" | jq -R . | jq -s .)
+  local MON_JSON=$(printf '%s\n' "${MONITOR_APPS[@]}" | jq -R . | jq -s .)
+  local UTIL_JSON=$(printf '%s\n' "${UTILS_APPS[@]}" | jq -R . | jq -s .)
+  
+  # Build JSON
+  jq -n \
+    --arg type "$INSTALL_TYPE" \
+    --arg ip "$SERVER_IP" \
+    --arg tz "$TIMEZONE" \
+    --arg rd_key "$RD_API_KEY" \
+    --arg vpn_en "$VPN_ENABLED" \
+    --arg vpn_prov "$VPN_PROVIDER" \
+    --arg media "$MEDIA_SERVER" \
+    --argjson arrs "$ARR_JSON" \
+    --argjson mons "$MON_JSON" \
+    --argjson utils "$UTIL_JSON" \
+    '$ARGS.named' > "$STATE_FILE"
+    
+  chmod 600 "$STATE_FILE"
+  success "State saved"
+}
+
+load_state() {
+  if [ -f "$STATE_FILE" ]; then
+    log "Loading previous state..."
+    INSTALL_TYPE=$(jq -r .type "$STATE_FILE")
+    RD_API_KEY=$(jq -r .rd_key "$STATE_FILE")
+    VPN_ENABLED=$(jq -r .vpn_en "$STATE_FILE")
+    MEDIA_SERVER=$(jq -r .media "$STATE_FILE")
+    
+    # Load arrays (safely)
+    mapfile -t ARR_APPS < <(jq -r '.arrs[]' "$STATE_FILE" 2>/dev/null)
+    mapfile -t MONITOR_APPS < <(jq -r '.mons[]' "$STATE_FILE" 2>/dev/null)
+    mapfile -t UTILS_APPS < <(jq -r '.utils[]' "$STATE_FILE" 2>/dev/null)
+    
+    success "State loaded successfully"
+  fi
+}
+
+# --- Configuration & Validation ---
+
+get_rd_api_key() {
+  if [ -n "$RD_API_KEY" ] && [ "$RD_API_KEY" != "null" ]; then
+    echo -e "Existing API Key found: ${CYAN}${RD_API_KEY:0:5}***${NC}"
+    read -p "Keep existing key? (Y/n): " KEEP
+    if [[ "${KEEP,,}" != "n" ]]; then return 0; fi
+  fi
+  
+  echo -e "${YELLOW}Enter Real-Debrid API Key:${NC} "
+  read RD_API_KEY
+  if [ -z "$RD_API_KEY" ]; then
+    error "API Key cannot be empty."
+    return 1
+  fi
+}
+
+setup_firewall() {
+  if ! command -v ufw &>/dev/null; then return; fi
+  
+  header "Firewall Configuration (UFW)"
+  read -p "Configure firewall automatically? (y/N): " SETUP_UFW
+  if [[ "${SETUP_UFW,,}" == "y" ]]; then
+    log "Configuring UFW..."
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow ssh
+    ufw allow 22/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    
+    # Core Ports
+    ufw allow 9999/tcp # Zurg
+    ufw allow 5000/tcp # CLI Debrid
+    
+    # Add ports dynamically based on apps
+    [[ "$MEDIA_SERVER" == "plex" ]] && ufw allow 32400/tcp
+    [[ "$MEDIA_SERVER" == "jellyfin" ]] && ufw allow 8096/tcp
+    
+    for app in "${ARR_APPS[@]}"; do
+      case $app in
+        sonarr) ufw allow 8989/tcp ;;
+        radarr) ufw allow 7878/tcp ;;
+        prowlarr) ufw allow 9696/tcp ;;
+        bazarr) ufw allow 6767/tcp ;;
+      esac
+    done
+    
+    echo "y" | ufw enable
+    success "Firewall configured"
+  fi
+}
+
+test_zurg_connection() {
+  log "Testing Zurg connectivity..."
+  sleep 5 # Give it a moment
+  
+  if ! docker ps | grep -q zurg; then
+    warning "Zurg container not running."
+    return 1
+  fi
+  
+  if curl -s --max-time 5 http://localhost:9999/ping >/dev/null; then
+    success "Zurg API is responsive"
+  else
+    warning "Zurg API not responding yet."
+  fi
+  
+  if rclone lsd zurg-wd: --config /root/.config/rclone/rclone.conf &>/dev/null; then
+    success "Rclone successfully connected to Zurg"
+    return 0
+  else
+    error "Rclone failed to connect to Zurg. Check logs."
+    return 1
+  fi
+}
+
+# --- Menus & Selection ---
+
+select_installation_type() {
+  header "Installation Type"
+  echo "1) CLI-based (Customizable, Modular)"
+  echo "2) DMB All-in-One (Pre-configured Stack)"
+  read -p "Select option [1]: " CHOICE
+  if [[ "$CHOICE" == "2" ]]; then
+    INSTALL_TYPE="dmb"
+  else
+    INSTALL_TYPE="cli"
+  fi
+  success "Selected: $INSTALL_TYPE"
+}
+
+select_components() {
+  header "Media Server"
+  echo "1) Plex"
+  echo "2) Jellyfin"
+  echo "3) None"
+  read -p "Select: " MS
+  case $MS in
+    1) MEDIA_SERVER="plex"; read -p "Enter Plex Claim Token (optional): " PLEX_CLAIM ;;
+    2) MEDIA_SERVER="jellyfin" ;;
+    *) MEDIA_SERVER="none" ;;
+  esac
+  
+  header "Automation Apps (*Arr)"
+  echo "Select apps (comma separated, e.g. 1,2,3):"
+  echo "1) Sonarr (TV)"
+  echo "2) Radarr (Movies)"
+  echo "3) Bazarr (Subtitles)"
+  echo "4) Prowlarr (Indexers)"
+  echo "5) All"
+  echo "6) None"
+  read -p "Selection: " ARR_IN
+  ARR_APPS=()
+  if [[ "$ARR_IN" == *"5"* ]]; then
+    ARR_APPS=("sonarr" "radarr" "bazarr" "prowlarr")
+  elif [[ "$ARR_IN" != "6" ]]; then
+    [[ "$ARR_IN" == *"1"* ]] && ARR_APPS+=("sonarr")
+    [[ "$ARR_IN" == *"2"* ]] && ARR_APPS+=("radarr")
+    [[ "$ARR_IN" == *"3"* ]] && ARR_APPS+=("bazarr")
+    [[ "$ARR_IN" == *"4"* ]] && ARR_APPS+=("prowlarr")
+  fi
+  
+  header "Monitoring & Utils"
+  echo "Select apps (comma separated):"
+  echo "1) Tautulli (Plex Stats)"
+  echo "2) Heimdall (Dashboard)"
+  echo "3) Uptime Kuma"
+  echo "4) Netdata"
+  echo "5) Pi-hole"
+  echo "6) Nginx Proxy Manager"
+  echo "7) FileBrowser"
+  echo "8) Duplicati"
+  read -p "Selection: " UTIL_IN
+  
+  MONITOR_APPS=()
+  UTILS_APPS=()
+  [[ "$UTIL_IN" == *"1"* ]] && MONITOR_APPS+=("tautulli")
+  [[ "$UTIL_IN" == *"2"* ]] && MONITOR_APPS+=("heimdall")
+  [[ "$UTIL_IN" == *"3"* ]] && MONITOR_APPS+=("uptime-kuma")
+  [[ "$UTIL_IN" == *"4"* ]] && MONITOR_APPS+=("netdata")
+  [[ "$UTIL_IN" == *"5"* ]] && UTILS_APPS+=("pihole")
+  [[ "$UTIL_IN" == *"6"* ]] && UTILS_APPS+=("npm")
+  [[ "$UTIL_IN" == *"7"* ]] && UTILS_APPS+=("filebrowser")
+  [[ "$UTIL_IN" == *"8"* ]] && UTILS_APPS+=("duplicati")
+  
+  header "VPN Configuration"
+  read -p "Enable VPN (Gluetun)? (y/N): " VPN_YN
+  if [[ "${VPN_YN,,}" == "y" ]]; then
+    VPN_ENABLED=true
+    read -p "VPN Provider (e.g. nordvpn, mullvad): " VPN_PROVIDER
+    read -p "VPN Username: " VPN_USER
+    read -p "VPN Password: " VPN_PASS
+  else
+    VPN_ENABLED=false
+  fi
+}
+
+# --- Generator Functions ---
+
+generate_configs() {
+  header "Generating Configurations"
+  
+  # Base Dirs
+  mkdir -p "$BASE_CONFIG_DIR" "$BASE_MOUNT_DIR/zurg" "$BASE_MOUNT_DIR/symlinked"
+  
+  # Rclone Config
+  mkdir -p /root/.config/rclone
+  cat > "/root/.config/rclone/rclone.conf" <<EOF
+[zurg-wd]
+type = webdav
+url = http://127.0.0.1:9999/dav/
+vendor = other
+pacer_min_sleep = 10ms
+pacer_burst = 0
+EOF
+
+  # Systemd Service
+  cat > "/etc/systemd/system/zurg-rclone.service" <<EOF
+[Unit]
+Description=Rclone mount for zurg
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=$(command -v rclone) mount \\
+  --allow-non-empty \\
+  --vfs-cache-mode full \\
+  --vfs-read-chunk-size 1M \\
+  --vfs-read-chunk-size-limit 32M \\
+  --buffer-size 64M \\
+  --vfs-cache-max-size=10G \\
+  --vfs-read-ahead 64M \\
+  --allow-other \\
+  --dir-cache-time=10s \\
+  zurg-wd: $BASE_MOUNT_DIR/zurg
+
+ExecStop=/bin/bash -c 'fusermount3 -uz $BASE_MOUNT_DIR/zurg 2>/dev/null || fusermount -uz $BASE_MOUNT_DIR/zurg 2>/dev/null || umount -l $BASE_MOUNT_DIR/zurg'
+Restart=on-abort
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+
+  # Zurg Config
+  mkdir -p "$BASE_CONFIG_DIR/zurg"
+  cat > "$BASE_CONFIG_DIR/zurg/config.yml" <<EOF
+zurg: v1
+token: ${RD_API_KEY}
+port: 9999
+concurrent_workers: 32
+check_for_changes_every_secs: 15
+directories:
+  shows:
+    group: media
+    filters:
+      - has_episodes: true
+  movies:
+    group: media
+    filters:
+      - regex: /.*/
+EOF
+  success "Configs generated"
+}
+
+generate_docker_compose() {
+  header "Generating Docker Compose"
+  local FILE="$BASE_CONFIG_DIR/docker-compose.yml"
+  
+  # Ensure Phalanx directory exists for CLI mode
+  mkdir -p "$BASE_CONFIG_DIR/phalanx"
+
+  # Header
+  cat > "$FILE" <<EOF
+version: "3.8"
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  zurg:
+    image: ghcr.io/debridmediamanager/zurg-testing:latest
+    container_name: zurg
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./zurg/config.yml:/app/config.yml
+    environment:
+      - TZ=$TIMEZONE
+
+  cli_debrid:
+    image: godver3/cli_debrid:dev
+    container_name: cli_debrid
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./cli_debrid:/user
+      - ./phalanx:/phalanx_db/data  # Added per request
+      - $BASE_MOUNT_DIR:/mnt
+    environment:
+      - TZ=$TIMEZONE
+    depends_on:
+      - zurg
+EOF
+
+  # VPN
+  if [ "$VPN_ENABLED" = true ]; then
+    cat >> "$FILE" <<EOF
+
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    logging: *default-logging
+    environment:
+      - VPN_SERVICE_PROVIDER=$VPN_PROVIDER
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=$VPN_USER
+      - OPENVPN_PASSWORD=$VPN_PASS
+    ports:
+      - "8888:8888/tcp"
+      - "8388:8388/tcp"
+      - "8388:8388/udp"
+EOF
+  fi
+
+  # Media Server
+  if [[ "$MEDIA_SERVER" == "plex" ]]; then
+    cat >> "$FILE" <<EOF
+
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    network_mode: host
+    logging: *default-logging
+    environment:
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - TZ=$TIMEZONE
+      - PLEX_CLAIM=$PLEX_CLAIM
+    volumes:
+      - ./plex/config:/config
+      - ./plex/transcode:/transcode
+      - $BASE_MOUNT_DIR:/mnt
+    devices:
+      - /dev/dri:/dev/dri
+EOF
+  elif [[ "$MEDIA_SERVER" == "jellyfin" ]]; then
+    cat >> "$FILE" <<EOF
+
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    ports:
+      - "8096:8096"
+    logging: *default-logging
+    environment:
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - TZ=$TIMEZONE
+    volumes:
+      - ./jellyfin:/config
+      - $BASE_MOUNT_DIR:/mnt
+    devices:
+      - /dev/dri:/dev/dri
+EOF
+  fi
+
+  # Arr Apps
+  for app in "${ARR_APPS[@]}"; do
+    local PORT=""
+    case $app in
+      sonarr) PORT="8989" ;;
+      radarr) PORT="7878" ;;
+      bazarr) PORT="6767" ;;
+      prowlarr) PORT="9696" ;;
+    esac
+    
+    cat >> "$FILE" <<EOF
+
+  $app:
+    image: lscr.io/linuxserver/$app:latest
+    container_name: $app
+    logging: *default-logging
+    environment:
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - TZ=$TIMEZONE
+    volumes:
+      - ./$app:/config
+      - $BASE_MOUNT_DIR:/mnt
+EOF
+    
+    # Route Prowlarr through VPN if enabled
+    if [ "$VPN_ENABLED" = true ] && [ "$app" == "prowlarr" ]; then
+      cat >> "$FILE" <<EOF
+    network_mode: "service:gluetun"
+EOF
+    else
+      cat >> "$FILE" <<EOF
+    ports:
+      - "$PORT:$PORT"
+EOF
+    fi
+  done
+
+  # Monitoring & Utilities
+  for app in "${MONITOR_APPS[@]}" "${UTILS_APPS[@]}"; do
+    case $app in
+      tautulli)
+        cat >> "$FILE" <<EOF
+
+  tautulli:
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    ports:
+      - "8181:8181"
+    environment:
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - TZ=$TIMEZONE
+    volumes:
+      - ./tautulli:/config
+EOF
+      ;;
+      heimdall)
+        cat >> "$FILE" <<EOF
+
+  heimdall:
+    image: lscr.io/linuxserver/heimdall:latest
+    container_name: heimdall
+    ports:
+      - "8081:80"
+      - "4443:443"
+    environment:
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - TZ=$TIMEZONE
+    volumes:
+      - ./heimdall:/config
+EOF
+      ;;
+      pihole)
+        cat >> "$FILE" <<EOF
+
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8080:80"
+    environment:
+      - TZ=$TIMEZONE
+    volumes:
+      - ./pihole/etc:/etc/pihole
+      - ./pihole/dnsmasq:/etc/dnsmasq.d
+EOF
+      ;;
+      npm)
+        cat >> "$FILE" <<EOF
+
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: npm
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    volumes:
+      - ./npm/data:/data
+      - ./npm/letsencrypt:/etc/letsencrypt
+EOF
+      ;;
+    esac
+  done
+
+  # Watchtower
+  cat >> "$FILE" <<EOF
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    logging: *default-logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 3 * * *
+EOF
+
+  success "Docker Compose generated at $FILE"
+}
+
+generate_dmb_compose() {
+  header "Generating DMB Docker Compose"
+  local FILE="$BASE_CONFIG_DIR/docker-compose.yml"
+  
+  # Create specific DMB dirs
+  mkdir -p "$BASE_CONFIG_DIR/DMB/"{config,log,Zurg/RD,Zurg/mnt,Riven/data,Riven/mnt,PostgreSQL/data,pgAdmin4/data,Zilean/data,plex_debrid,cli_debrid,phalanx_db}
+
+  cat > "$FILE" <<EOF
+version: "3"
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  DMB:
+    container_name: DMB
+    image: iampuid0/dmb:latest
+    stop_grace_period: 30s
+    shm_size: 128mb
+    stdin_open: true
+    tty: true
+    logging: *default-logging
+    volumes:
+      - ./DMB/config:/config
+      - ./DMB/log:/log
+      - ./DMB/Zurg/RD:/zurg/RD
+      - ./DMB/Zurg/mnt:/data:rshared
+      - ./DMB/Riven/data:/riven/backend/data
+      - ./DMB/Riven/mnt:/mnt
+      - ./DMB/PostgreSQL/data:/postgres_data
+      - ./DMB/pgAdmin4/data:/pgadmin/data
+      - ./DMB/Zilean/data:/zilean/app/data
+      - ./DMB/plex_debrid:/plex_debrid/config
+      - ./DMB/cli_debrid:/cli_debrid/data
+      - ./DMB/phalanx_db:/phalanx_db/data
+    environment:
+      - TZ=$TIMEZONE
+      - PUID=$(id -u)
+      - PGID=$(id -g)
+      - DMB_LOG_LEVEL=INFO
+      - ZURG_INSTANCES_REALDEBRID_API_KEY=${RD_API_KEY}
+      - RIVEN_FRONTEND_ENV_ORIGIN=http://${SERVER_IP}:3000
+    ports:
+      - "3005:3005"
+      - "3000:3000"
+      - "5050:5050"
+      - "5000:5000"
+    devices:
+      - /dev/fuse:/dev/fuse:rwm
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+      - no-new-privileges
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    logging: *default-logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 3 * * *
+EOF
+
+  if [ "$DEPLOY_PLEX" = true ]; then
+    cat >> "$FILE" <<EOF
+
+  plex:
+    image: plexinc/pms-docker:latest
+    container_name: plex
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - ./plex/library:/config
+      - ./plex/transcode:/transcode
+      - ./DMB/Zurg/mnt:/data
+      - ./DMB/Riven/mnt:/mnt
+    environment:
+      - TZ=$TIMEZONE
+      - PLEX_UID=$(id -u)
+      - PLEX_GID=$(id -g)
+      - PLEX_CLAIM=$PLEX_CLAIM
+    ports:
+      - "32400:32400"
+    depends_on:
+      - DMB
+    restart: unless-stopped
+EOF
+  fi
+  
+  success "DMB Docker Compose generated at $FILE"
+}
+
+# --- Deployment & Update Logic ---
+
+deploy_stack() {
+  header "Deploying Stack"
+  if [ ! -f "$BASE_CONFIG_DIR/docker-compose.yml" ]; then
+    error "Compose file not found."
+    return 1
+  fi
+  
+  cd "$BASE_CONFIG_DIR" || exit
+  
+  log "Pulling images..."
+  docker compose pull
+  
+  log "Starting containers..."
+  docker compose up -d
+  
+  if [ $? -eq 0 ]; then
+    success "Containers started successfully"
+  else
+    error "Failed to start containers"
+  fi
+}
+
+update_existing_setup() {
+  header "Update Existing Setup"
+  load_state
+  
+  if [[ -z "$INSTALL_TYPE" ]]; then
+    warning "No state file found. Attempting to detect setup type..."
+    if docker ps -a | grep -q "DMB"; then
+      INSTALL_TYPE="dmb"
+      log "Detected DMB setup"
+    else
+      INSTALL_TYPE="cli"
+      log "Detected CLI setup"
+    fi
+  fi
+  
+  log "Stopping services..."
+  systemctl stop zurg-rclone.service
+  
+  if [ "$INSTALL_TYPE" == "dmb" ]; then
+    generate_dmb_compose
+  else
+    generate_configs # Refresh configs
+    generate_docker_compose
+  fi
+  
+  deploy_stack
+  
+  log "Restarting mount service..."
+  systemctl start zurg-rclone.service
+  
+  success "Update complete"
+}
+
+repair_installation() {
+  header "Repairing Installation"
+  log "Checking Docker..."
+  if ! command -v docker &>/dev/null; then install_docker; fi
+  
+  log "Checking Rclone..."
+  if ! command -v rclone &>/dev/null; then install_rclone; fi
+  
+  log "Checking Mount Service..."
+  if ! systemctl is-active --quiet zurg-rclone.service; then
+    warning "Mount service is down. Restarting..."
+    systemctl restart zurg-rclone.service
+  fi
+  
+  log "Checking Containers..."
+  if [ -f "$BASE_CONFIG_DIR/docker-compose.yml" ]; then
+    cd "$BASE_CONFIG_DIR"
+    docker compose up -d --remove-orphans
+  fi
+  
+  test_zurg_connection
+  success "Repair complete"
+}
+
+# --- Backup & Restore ---
+
+backup_system() {
+  header "System Backup"
+  local DATE=$(date +%Y%m%d_%H%M%S)
+  local BFILE="$BACKUP_DIR/backup_$DATE.tar.gz"
+  
+  mkdir -p "$BACKUP_DIR"
+  
+  log "Creating backup archive..."
+  tar -czf "$BFILE" \
+    "$BASE_CONFIG_DIR" \
+    "/etc/systemd/system/zurg-rclone.service" \
+    "/root/.config/rclone/rclone.conf" \
+    "$STATE_FILE" \
+    2>/dev/null
+    
+  if [ -f "$BFILE" ]; then
+    success "Backup created: $BFILE"
+  else
+    error "Backup failed"
+  fi
+}
+
+restore_system() {
+  header "System Restore"
+  if [ -z "$(ls -A $BACKUP_DIR 2>/dev/null)" ]; then
+    error "No backups found in $BACKUP_DIR"
+    return
+  fi
+  
+  echo "Available backups:"
+  ls -1 "$BACKUP_DIR"
+  read -p "Enter backup filename: " BNAME
+  local BPATH="$BACKUP_DIR/$BNAME"
+  
+  if [ ! -f "$BPATH" ]; then error "File not found"; return; fi
+  
+  log "Restoring..."
+  systemctl stop zurg-rclone.service
+  tar -xzf "$BPATH" -C /
+  
+  systemctl daemon-reload
+  load_state
+  success "Restore complete. Run 'Update/Repair' to apply changes."
+}
+
+uninstall_system() {
+  header "Uninstall System"
+  warning "This will STOP all containers and DELETE services."
+  warning "Data in $BASE_CONFIG_DIR will be PRESERVED."
+  read -p "Are you sure? (y/N): " CONFIRM
+  if [[ "${CONFIRM,,}" == "y" ]]; then
+    systemctl stop zurg-rclone.service
+    systemctl disable zurg-rclone.service
+    rm /etc/systemd/system/zurg-rclone.service
+    
+    if [ -f "$BASE_CONFIG_DIR/docker-compose.yml" ]; then
+      cd "$BASE_CONFIG_DIR" && docker compose down
+    fi
+    
+    rm -rf "$STATE_DIR"
+    success "Uninstalled. Config data remains in $BASE_CONFIG_DIR"
+  fi
+}
+
+# --- Help & Completion ---
+
+view_help() {
+  detect_server_ip
+  header "Documentation"
+  echo -e "${BOLD}Service Ports:${NC}"
+  echo -e "DMB Dashboard:  http://$SERVER_IP:3005"
+  echo -e "Zurg:           http://$SERVER_IP:9999"
+  echo -e "CLI Debrid:     http://$SERVER_IP:5000"
+  echo -e "Plex:           http://$SERVER_IP:32400/web"
+  echo -e "Jellyfin:       http://$SERVER_IP:8096"
+  echo -e "Sonarr/Radarr:  8989 / 7878"
+  echo -e "Heimdall:       8081"
+  echo
+  echo -e "${BOLD}Commands:${NC}"
+  echo -e "Logs:           tail -f $LOG_FILE"
+  echo -e "Service:        systemctl status zurg-rclone.service"
+  read -p "Press Enter..."
+}
+
+# --- Main Menu ---
+
+show_main_menu() {
+  while true; do
+    header "Debrid Media Stack Manager v2.0"
+    echo "1) Install New Setup (CLI Mode)"
+    echo "2) Install New Setup (DMB Mode)"
+    echo "3) Update/Reconfigure Existing"
+    echo "4) Repair Installation"
+    echo "5) Backup System"
+    echo "6) Restore System"
+    echo "7) Uninstall System"
+    echo "8) Documentation"
+    echo "9) Exit"
+    
+    read -p "Select option: " OPT
+    case $OPT in
+      1) 
+        INSTALL_TYPE="cli"
+        setup_directories
+        get_rd_api_key
+        select_components
+        setup_firewall
+        save_state
+        generate_configs
+        generate_docker_compose
+        deploy_stack
+        test_zurg_connection
+        ;;
+      2)
+        INSTALL_TYPE="dmb"
+        setup_directories
+        get_rd_api_key
+        read -p "Deploy Plex? (y/N): " PLEX_YN
+        if [[ "${PLEX_YN,,}" == "y" ]]; then
+          DEPLOY_PLEX=true
+          read -p "Plex Claim Token: " PLEX_CLAIM
+        fi
+        save_state
+        generate_dmb_compose
+        deploy_stack
+        ;;
+      3) update_existing_setup ;;
+      4) repair_installation ;;
+      5) backup_system ;;
+      6) restore_system ;;
+      7) uninstall_system ;;
+      8) view_help ;;
+      9) exit 0 ;;
+      *) warning "Invalid option" ;;
+    esac
+  done
+}
+
+# --- Entry Point ---
+
+check_root
+detect_os_arch
+setup_package_manager
+install_prerequisites
+install_docker
+install_rclone
+detect_server_ip
+detect_timezone
+load_state
+show_main_menu
